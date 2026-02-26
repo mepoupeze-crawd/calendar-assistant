@@ -16,14 +16,17 @@ dotenv.config();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
+const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID || '7131103597'; // Default: João Calice (PersonalAssistant)
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN not set');
   process.exit(1);
 }
 
+console.log(`[Bot] Configured to respond only in chat: ${ALLOWED_CHAT_ID}`);
+
 let lastUpdateId = 0;
-const eventCache: Map<string, any> = new Map(); // preview_id → validated event
+const eventCache: Map<string, any> = new Map(); // event_id → { message, validated_event, conflicts }
 
 /**
  * Fetch new messages from Telegram
@@ -117,6 +120,12 @@ async function handleUpdate(update: any): Promise<void> {
 
   if (!chatId) return;
 
+  // Only respond in allowed chat
+  if (String(chatId) !== ALLOWED_CHAT_ID) {
+    console.log(`[Bot] Ignoring message from chat ${chatId} (allowed: ${ALLOWED_CHAT_ID})`);
+    return;
+  }
+
   try {
     // Handle message (text input)
     if (update.message) {
@@ -135,7 +144,13 @@ async function handleUpdate(update: any): Promise<void> {
       // Cache the event for later confirmation
       if (response.buttons) {
         const eventId = `${chatId}_${Date.now()}`;
-        eventCache.set(eventId, { message: telegramMsg });
+        // Parse the validated event from the response (embedded in preview)
+        // For now, store the message and re-parse on confirmation
+        eventCache.set(eventId, { 
+          message: telegramMsg,
+          timestamp: Date.now(),
+        });
+        console.log(`[Bot] Cached event ${eventId} for chat ${chatId}`);
       }
     }
 
@@ -145,12 +160,39 @@ async function handleUpdate(update: any): Promise<void> {
       console.log(`[Bot] Callback from ${chatId}: ${callbackData}`);
 
       if (callbackData.startsWith('confirm_')) {
-        // TODO: Retrieve cached event and confirm
-        await answerCallbackQuery(queryId, '✅ Criando evento...');
-        await sendMessage(String(chatId), '✅ Evento criado com sucesso!');
+        const eventId = callbackData.replace('confirm_', '');
+        const cached = eventCache.get(eventId);
+
+        if (!cached) {
+          await answerCallbackQuery(queryId, '⏰ Preview expirou. Envie o evento novamente.');
+          await sendMessage(String(chatId), '⏰ Preview expirou. Por favor, envie o evento novamente.');
+          return;
+        }
+
+        try {
+          await answerCallbackQuery(queryId, '✅ Criando evento...');
+          
+          // Re-parse and validate the message
+          const { parsed } = await handleTelegramInput(cached.message);
+          
+          // Actually use handleConfirmation
+          const response = await handleConfirmation(String(chatId), eventId, parsed);
+          await sendMessage(response.chat_id, response.text);
+          
+          // Clean up cache
+          eventCache.delete(eventId);
+          console.log(`[Bot] Cleared cache for ${eventId}`);
+        } catch (error) {
+          const err = error instanceof Error ? error.message : 'Unknown error';
+          await answerCallbackQuery(queryId, '❌ Erro ao criar evento');
+          await sendMessage(String(chatId), `❌ Erro: ${err}`);
+        }
       } else if (callbackData.startsWith('cancel_')) {
+        const eventId = callbackData.replace('cancel_', '');
         await answerCallbackQuery(queryId, '❌ Cancelado');
+        await handleCancellation(String(chatId), eventId);
         await sendMessage(String(chatId), '❌ Evento cancelado.');
+        eventCache.delete(eventId);
       } else if (callbackData.startsWith('edit_')) {
         await answerCallbackQuery(queryId, '✏️ Editar ainda não implementado');
         await sendMessage(String(chatId), '✏️ Editar ainda não implementado. Envie um novo comando.');
