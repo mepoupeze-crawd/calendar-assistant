@@ -1,4 +1,4 @@
-# Calendar Assistant - Mission Control
+# Calendar Assistant
 
 Portuguese-language calendar event creation via Telegram, with LLM parsing and Google Calendar integration.
 
@@ -31,7 +31,7 @@ Confirmation + event link
 brew install gog  # or: https://github.com/jamestelfer/gog
 
 # 2. Authenticate gog for calendar
-gog auth add mepoupz@gmail.com --services calendar
+gog auth add <your-email> --services calendar
 
 # 3. Node.js
 node --version  # >= 22
@@ -39,18 +39,19 @@ node --version  # >= 22
 
 ### Environment
 
-Create `.env`:
+Create `.env` in the project root:
 ```
-OPENROUTER_API_KEY=sk-or-...
-TELEGRAM_BOT_TOKEN=7868753970:AAGV1KUCcXraiSE8ivQgi1jo_OA_t8knBIY
-GOG_ACCOUNT=mepoupz@gmail.com
+OPENROUTER_API_KEY=<your-openrouter-api-key>
+TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
+GOG_ACCOUNT=<your-google-email>
 GOOGLE_CALENDAR_ID=primary
 ```
 
 Or set environment variables:
 ```bash
-export OPENROUTER_API_KEY=...
-export TELEGRAM_BOT_TOKEN=...
+export OPENROUTER_API_KEY=<your-openrouter-api-key>
+export TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
+export GOG_ACCOUNT=<your-google-email>
 ```
 
 ### Install Dependencies
@@ -87,7 +88,7 @@ Checks prerequisites + starts bot.
 ### Background Mode (tmux/screen)
 
 ```bash
-tmux new-session -d -s calendar-bot "cd /data/.openclaw/workspace/mission-control && npm run bot"
+tmux new-session -d -s calendar-bot "cd /path/to/calendar-assistant && npm run bot"
 
 # View logs
 tmux attach-session -t calendar-bot
@@ -148,13 +149,13 @@ OPENROUTER_API_KEY=$OPENROUTER_API_KEY npx jest src/lib/calendar/conflict-detect
 ### VPS / Always-On
 ```bash
 # Start in screen
-screen -dmS calendar-bot bash -c 'cd mission-control && npm run bot'
+screen -dmS calendar-bot bash -c 'cd /path/to/calendar-assistant && npm run bot'
 
 # Or systemd (create /etc/systemd/system/calendar-bot.service)
 [Service]
 Type=simple
 User=app
-WorkingDirectory=/data/.openclaw/workspace/mission-control
+WorkingDirectory=/path/to/calendar-assistant
 ExecStart=/usr/bin/npm run bot
 Restart=on-failure
 ```
@@ -185,8 +186,8 @@ cat .env
 
 ### gog not authenticated
 ```bash
-gog auth add mepoupz@gmail.com --services calendar
-gog calendar list -a mepoupz@gmail.com --plain  # verify
+gog auth add <your-email> --services calendar
+gog calendar list -a <your-email> --plain  # verify
 ```
 
 ### LLM errors
@@ -202,7 +203,7 @@ curl -H "Authorization: Bearer $OPENROUTER_API_KEY" \
 ## Files
 
 ```
-mission-control/
+calendar-assistant/
 ├── src/
 │   ├── lib/calendar/
 │   │   ├── parser.ts           # LLM-based NLP
@@ -237,6 +238,5 @@ mission-control/
 
 ---
 
-**Last Updated:** 2026-02-25  
-**Maintainer:** João Calice (strategic direction)  
-**Tech Lead:** Sam (AI agent)
+**Last Updated:** 2026-02-26  
+**Project:** Calendar Assistant for Telegram
