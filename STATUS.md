@@ -69,7 +69,7 @@ cd /data/.openclaw/workspace/projetos/calendar-assistant
 cp .env.example .env
 # Edit .env with:
 #  - TELEGRAM_BOT_TOKEN
-#  - OPENROUTER_API_KEY
+#  - OPENAI_API_KEY
 #  - GOG_ACCOUNT
 #  - ALLOWED_CHAT_ID (default: 7131103597)
 
@@ -179,7 +179,7 @@ calendar-assistant/
 
 ### 1. Credentials (João's Input)
 - `TELEGRAM_BOT_TOKEN` — Get from @BotFather
-- `OPENROUTER_API_KEY` — From openrouter.ai
+- `OPENAI_API_KEY` — From platform.openai.com
 - `GOG_ACCOUNT` — Your Google email
 
 ### 2. Deployment Decision (Claudio's Input)
@@ -209,7 +209,7 @@ npx ts-node -P tsconfig.test.json src/lib/calendar/creator.test.ts
 ## 📝 Next Steps (Ordered)
 
 1. **Await Claudio** → Deployment recommendation
-2. **Provide Credentials** → TELEGRAM_BOT_TOKEN, OPENROUTER_API_KEY
+2. **Provide Credentials** → TELEGRAM_BOT_TOKEN, OPENAI_API_KEY
 3. **Deploy** → Local, VPS, or daemon
 4. **Test** → Send message to bot, confirm event creation
 5. **Monitor** → Logs + metrics

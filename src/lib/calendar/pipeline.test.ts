@@ -132,12 +132,13 @@ describe('Calendar Agent - Phase 1 Pipeline', () => {
       expect(validation.valid).toBe(false);
     });
 
-    test('12. End time before start time', async () => {
-      const input = 'Reunião amanhã 14:30 às 10:00'; // end before start
+    test('12. End time before start time (treated as cross-midnight)', async () => {
+      const input = 'Reunião amanhã 14:30 às 10:00'; // end before start → cross-midnight
       const parsed = await parseEventFromInput(input);
 
       const validation = validateParsedEvent(parsed);
-      expect(validation.valid).toBe(false);
+      // No longer rejected — creator advances end_date by 1 day when end < start
+      expect(validation.valid).toBe(true);
     });
   });
 

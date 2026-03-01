@@ -30,7 +30,7 @@ interface LLMParserResponse {
  */
 export async function parseEventFromInput(
   input: string,
-  model: string = 'google/gemini-2.5-flash-lite'
+  model: string = 'gpt-4o-mini'
 ): Promise<ParsedEvent> {
   if (!input || input.trim().length === 0) {
     return {
@@ -97,7 +97,7 @@ EXEMPLOS:
 Responda APENAS com JSON, sem markdown ou explicações.`;
 
   try {
-    // Simula chamada a LLM (em produção, usaria OpenAI/Claude API)
+    // Chama a API da OpenAI
     const response = await callLLMParser(userPrompt, systemPrompt, model);
     const parsed = response as LLMParserResponse;
 
@@ -157,16 +157,16 @@ function determineStatus(parsed: LLMParserResponse): ParsedEvent['status'] {
 }
 
 /**
- * Call LLM API via OpenRouter
+ * Call LLM API via OpenAI
  */
 async function callLLMParser(
   userPrompt: string,
   systemPrompt: string,
   model: string
 ): Promise<LLMParserResponse> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY not set');
+    throw new Error('OPENAI_API_KEY not set');
   }
 
   const payload = {
@@ -179,20 +179,18 @@ async function callLLMParser(
     max_tokens: 1024,
   };
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': 'mission-control-calendar-assistant',
-      'X-Title': 'Mission Control Calendar Parser',
     },
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`OpenRouter API error: ${response.status} ${error}`);
+    throw new Error(`OpenAI API error: ${response.status} ${error}`);
   }
 
   const data = (await response.json()) as { choices: Array<{ message: { content: string } }> };

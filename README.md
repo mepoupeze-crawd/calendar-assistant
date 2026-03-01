@@ -41,7 +41,7 @@ node --version  # >= 22
 
 Create `.env` in the project root:
 ```
-OPENROUTER_API_KEY=<your-openrouter-api-key>
+OPENAI_API_KEY=<your-openai-api-key>
 TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
 GOG_ACCOUNT=<your-google-email>
 GOOGLE_CALENDAR_ID=primary
@@ -49,7 +49,7 @@ GOOGLE_CALENDAR_ID=primary
 
 Or set environment variables:
 ```bash
-export OPENROUTER_API_KEY=<your-openrouter-api-key>
+export OPENAI_API_KEY=<your-openai-api-key>
 export TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
 export GOG_ACCOUNT=<your-google-email>
 ```
@@ -102,17 +102,17 @@ tmux kill-session -t calendar-bot
 ### Run All Tests
 
 ```bash
-OPENROUTER_API_KEY=$OPENROUTER_API_KEY npm test
+npm test
 ```
 
 ### Run Specific Suite
 
 ```bash
 # Parser + Validator (22 tests)
-OPENROUTER_API_KEY=$OPENROUTER_API_KEY npm run test:t7
+npm run test:t7
 
 # Conflict Detector (18 tests)
-OPENROUTER_API_KEY=$OPENROUTER_API_KEY npx jest src/lib/calendar/conflict-detector.test.ts
+npx jest src/lib/calendar/conflict-detector.test.ts
 ```
 
 ## Architecture
@@ -193,11 +193,11 @@ gog calendar list -a <your-email> --plain  # verify
 ### LLM errors
 ```bash
 # Check API key
-echo $OPENROUTER_API_KEY
+echo $OPENAI_API_KEY
 
-# Check Gemini model is available
-curl -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-  https://openrouter.ai/api/v1/models | grep gemini-2.5-flash
+# Check OpenAI connectivity
+curl -H "Authorization: Bearer $OPENAI_API_KEY" \
+  https://api.openai.com/v1/models | grep gpt-4o-mini
 ```
 
 ## Files

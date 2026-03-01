@@ -8,6 +8,8 @@ import { validateParsedEvent } from '../lib/calendar/validator';
 import { checkCalendarConflicts } from '../lib/calendar/conflict-detector';
 import { createCalendarEvent } from '../lib/calendar/creator';
 import { generatePreview } from '../lib/calendar/previewer';
+import { lookupContactsByName } from '../lib/calendar/contacts';
+import type { Contact } from '../lib/calendar/contacts';
 import type { ValidatedEvent } from '../lib/calendar/types';
 
 export interface TelegramMessage {
@@ -24,6 +26,16 @@ export interface TelegramResponse {
   text: string;
   buttons?: Array<{ text: string; callback_data: string }>;
   action?: 'send' | 'edit' | 'delete';
+  event_id?: string;
+  validated_event?: ValidatedEvent;
+  needsClarification?: boolean;
+  /** Set when multiple contacts match a participant name — user must pick one. */
+  contactChoice?: {
+    participantName: string;
+    options: Contact[];
+  };
+  /** Set when no contact was found — user must type the email for this name. */
+  missingEmailFor?: string;
 }
 
 /**
@@ -58,6 +70,7 @@ export async function handleTelegramInput(
           chat_id: msg.chat_id,
           text: `⚠️ Preciso esclarecer:\n\n${validation.clarificationRequest}`,
           action: 'send',
+          needsClarification: true,
         };
       }
 
@@ -69,26 +82,8 @@ export async function handleTelegramInput(
       };
     }
 
-    // Step 4: Check conflicts
-    const conflicts = await checkCalendarConflicts(validation.correctedEvent!);
-
-    // Step 5: Generate preview
-    const preview = generatePreview(
-      validation.correctedEvent!,
-      conflicts.has_conflicts ? conflicts.conflicts : undefined
-    );
-
-    // Step 6: Return preview + confirmation buttons
-    return {
-      chat_id: msg.chat_id,
-      text: preview.text,
-      buttons: [
-        { text: '✅ Confirmar', callback_data: `confirm_${preview.event_id}` },
-        { text: '❌ Cancelar', callback_data: `cancel_${preview.event_id}` },
-        { text: '✏️ Editar', callback_data: `edit_${preview.event_id}` },
-      ],
-      action: 'send',
-    };
+    // Steps 3.5-6: Resolve participant emails (contacts lookup) then preview
+    return resolveParticipantsAndPreview(msg.chat_id, validation.correctedEvent!);
   } catch (error) {
     const err = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[Telegram] Error: ${err}`);
@@ -115,8 +110,8 @@ export async function handleConfirmation(
     const result = await createCalendarEvent({
       event,
       event_id,
-      calendar_id: 'primary',
-      owner_email: 'jgcalice@gmail.com',
+      calendar_id: process.env.GOG_ACCOUNT || 'mepoupeze@gmail.com',
+      owner_email: process.env.CALENDAR_OWNER_EMAIL || 'jgcalice@gmail.com',
     });
 
     return {
@@ -146,5 +141,91 @@ export async function handleCancellation(
     chat_id,
     text: '❌ Evento cancelado.',
     action: 'send',
+  };
+}
+
+// ─── Contact Resolution + Preview ─────────────────────────────────────────────
+
+/**
+ * Resolve participant emails one by one via contacts lookup, then show preview.
+ * - 0 contacts found  → ask user to type the email
+ * - 1 contact found   → auto-resolve, continue
+ * - 2+ contacts found → ask user to pick one (buttons + numbered list)
+ * - all resolved      → conflict check + event preview
+ */
+export async function resolveParticipantsAndPreview(
+  chat_id: string,
+  event: ValidatedEvent
+): Promise<TelegramResponse> {
+  const unresolved = event.participants.find(p => !p.email);
+
+  if (!unresolved) {
+    return previewEvent(chat_id, event);
+  }
+
+  const contacts = await lookupContactsByName(unresolved.name);
+
+  if (contacts.length === 0) {
+    return {
+      chat_id,
+      text: `⚠️ Não encontrei "<b>${unresolved.name}</b>" nos seus contatos.\n\nQual o email?`,
+      action: 'send',
+      needsClarification: true,
+      missingEmailFor: unresolved.name,
+      validated_event: event,
+    };
+  }
+
+  if (contacts.length === 1) {
+    console.log(`[Telegram] Auto-resolved "${unresolved.name}" → ${contacts[0].email}`);
+    return resolveParticipantsAndPreview(chat_id, setParticipantEmail(event, unresolved.name, contacts[0].email));
+  }
+
+  // Multiple matches
+  const optionsList = contacts.map((c, i) => `${i + 1}. ${c.name} (${c.email})`).join('\n');
+  return {
+    chat_id,
+    text: `👥 Encontrei ${contacts.length} contatos com o nome "<b>${unresolved.name}</b>":\n\n${optionsList}\n\nQual deles você quer adicionar?`,
+    buttons: [
+      ...contacts.map((c, i) => ({ text: c.name, callback_data: `pick_contact_${i}` })),
+      { text: '✍️ Digitar email', callback_data: 'pick_contact_manual' },
+    ],
+    action: 'send',
+    contactChoice: { participantName: unresolved.name, options: contacts },
+    validated_event: event,
+  };
+}
+
+/** Returns a new ValidatedEvent with the email resolved for the first matching participant. */
+export function setParticipantEmail(
+  event: ValidatedEvent,
+  participantName: string,
+  email: string
+): ValidatedEvent {
+  return {
+    ...event,
+    participants: event.participants.map(p =>
+      p.name === participantName && !p.email
+        ? { ...p, email, resolved: true }
+        : p
+    ),
+  };
+}
+
+/** Conflict check + preview for a fully-resolved event. */
+async function previewEvent(chat_id: string, event: ValidatedEvent): Promise<TelegramResponse> {
+  const conflicts = await checkCalendarConflicts(event);
+  const preview = generatePreview(event, conflicts.has_conflicts ? conflicts.conflicts : undefined);
+  return {
+    chat_id,
+    text: preview.text,
+    buttons: [
+      { text: '✅ Confirmar', callback_data: `confirm_${preview.event_id}` },
+      { text: '❌ Cancelar', callback_data: `cancel_${preview.event_id}` },
+      { text: '✏️ Editar', callback_data: `edit_${preview.event_id}` },
+    ],
+    action: 'send',
+    event_id: preview.event_id,
+    validated_event: event,
   };
 }

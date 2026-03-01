@@ -9,6 +9,7 @@
  */
 
 import { ValidatedEvent } from './types';
+import { getCalendarClient } from './google-auth';
 
 export interface CalendarEvent {
   id: string;
@@ -77,24 +78,29 @@ export async function checkCalendarConflicts(
 }
 
 /**
- * Helper: Fetch events for a specific date via gog CLI
- * (In production, uses `gog calendar events <calendarId> --from <date>T00:00 --to <date>T23:59`)
+ * Fetch events for a specific date via Google Calendar API.
  */
 async function fetchEventsForDate(
   date: string, // YYYY-MM-DD
   calendarId: string
 ): Promise<CalendarEvent[]> {
-  // TODO: Integrate with gog CLI
-  // Example command:
-  // gog calendar events <calendarId> \
-  //   --from <date>T00:00:00-03:00 \
-  //   --to <date>T23:59:59-03:00 \
-  //   --json
-
   console.log(`[ConflictDetector] Fetching events for ${date} (calendar: ${calendarId})`);
 
-  // Mock: return empty list (will be replaced with gog integration)
-  return [];
+  const calendar = getCalendarClient();
+  const response = await calendar.events.list({
+    calendarId,
+    timeMin: `${date}T00:00:00-03:00`,
+    timeMax: `${date}T23:59:59-03:00`,
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+
+  return (response.data.items ?? []).map((item: any) => ({
+    id: item.id ?? '',
+    title: item.summary ?? '(sem título)',
+    start: { dateTime: item.start?.dateTime, date: item.start?.date },
+    end:   { dateTime: item.end?.dateTime,   date: item.end?.date   },
+  }));
 }
 
 /**

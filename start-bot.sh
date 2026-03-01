@@ -2,7 +2,7 @@
 
 # Calendar Assistant Bot - Local Startup
 # Prerequisites:
-# - OPENROUTER_API_KEY set
+# - OPENAI_API_KEY set
 # - TELEGRAM_BOT_TOKEN set (or in .env)
 # - gog configured: gog auth add mepoupz@gmail.com --services calendar
 
@@ -16,8 +16,8 @@ if [ -f .env ]; then
 fi
 
 # Check requirements
-if [ -z "$OPENROUTER_API_KEY" ]; then
-  echo "❌ OPENROUTER_API_KEY not set"
+if [ -z "$OPENAI_API_KEY" ]; then
+  echo "❌ OPENAI_API_KEY not set"
   exit 1
 fi
 
@@ -43,7 +43,7 @@ echo "✅ All checks passed"
 echo ""
 echo "🚀 Bot polling..."
 echo "   Token: ${TELEGRAM_BOT_TOKEN:0:20}..."
-echo "   API Key: ${OPENROUTER_API_KEY:0:20}..."
+echo "   API Key: ${OPENAI_API_KEY:0:20}..."
 echo ""
 echo "Press Ctrl+C to stop"
 echo ""

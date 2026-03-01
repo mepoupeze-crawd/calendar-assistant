@@ -167,12 +167,8 @@ function validateLogicalConsistency(
   errors: string[],
   warnings: string[]
 ): void {
-  // If both times present, end_time > start_time
-  if (parsed.start_time && parsed.end_time) {
-    if (!isTimeAfter(parsed.end_time, parsed.start_time)) {
-      errors.push('time_end_before_start');
-    }
-  }
+  // If both times present and end <= start, treat as cross-midnight (valid).
+  // We no longer raise time_end_before_start — the creator will advance end_date by 1 day.
 
   // Duration should match times if present
   if (
@@ -315,7 +311,9 @@ function isDurationConsistent(
   const [startHour, startMin] = startTime.split(':').map(Number);
   const [endHour, endMin] = endTime.split(':').map(Number);
 
-  const calculatedDuration = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+  let calculatedDuration = (endHour * 60 + endMin) - (startHour * 60 + startMin);
+  // Cross-midnight: add 24h
+  if (calculatedDuration <= 0) calculatedDuration += 24 * 60;
 
   // Allow 5 min tolerance
   return Math.abs(calculatedDuration - durationMinutes) <= 5;
