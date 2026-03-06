@@ -1,0 +1,20 @@
+[Unit]
+Description=Calendar Assistant Telegram Bot
+Documentation=https://github.com/jgcalice/calendar-assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=calendar
+WorkingDirectory=/opt/calendar-assistant
+EnvironmentFile=/opt/calendar-assistant/.env
+ExecStart=/usr/bin/npx ts-node -P tsconfig.test.json src/bot.ts
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=calendar-bot
+
+[Install]
+WantedBy=multi-user.target
