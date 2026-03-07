@@ -88,7 +88,7 @@ jobs:
           command_timeout: 20m
           script: |
             set -e
-            sudo -n systemctl restart calendar-bot
+            sudo -n /usr/bin/systemctl restart calendar-bot
             sleep 5
-            sudo -n systemctl status calendar-bot --no-pager -l
-            sudo -n journalctl -u calendar-bot -n 50 --no-pager
+            sudo -n /usr/bin/systemctl status calendar-bot --no-pager -l
+            sudo -n /usr/bin/journalctl -u calendar-bot -n 50 --no-pager
