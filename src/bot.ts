@@ -171,7 +171,7 @@ async function getUpdates(): Promise<any[]> {
 async function sendMessage(
   chatId: string,
   text: string,
-  buttons?: Array<{ text: string; callback_data: string }>
+  buttons?: Array<Array<{ text: string; callback_data: string }>>
 ): Promise<void> {
   const payload: any = {
     chat_id: chatId,
@@ -181,7 +181,7 @@ async function sendMessage(
 
   if (buttons && buttons.length > 0) {
     payload.reply_markup = {
-      inline_keyboard: [buttons.map(btn => ({ text: btn.text, callback_data: btn.callback_data }))],
+      inline_keyboard: buttons,
     };
   }
 

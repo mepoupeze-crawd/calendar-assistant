@@ -16,9 +16,10 @@ export interface Contact {
 /**
  * Search the authenticated user's contacts by name.
  * Returns all contacts with at least one email address.
- * Returns [] silently on error (fail open — caller will ask for email).
+ * Returns { contacts: [], error: true } on API error (caller shows distinct message).
+ * Returns { contacts: [], error: false } when no match is found.
  */
-export async function lookupContactsByName(name: string): Promise<Contact[]> {
+export async function lookupContactsByName(name: string): Promise<{ contacts: Contact[]; error: boolean }> {
   try {
     const auth = getGoogleAuth();
     const people = google.people({ version: 'v1', auth });
@@ -52,12 +53,12 @@ export async function lookupContactsByName(name: string): Promise<Contact[]> {
     }
 
     console.log(`[Contacts] "${name}" → ${results.length} result(s)`);
-    return results;
+    return { contacts: results, error: false };
   } catch (err) {
     console.warn(
       '[Contacts] Lookup failed (re-run `npm run authorize` to add contacts scope):',
       err instanceof Error ? err.message : String(err)
     );
-    return [];
+    return { contacts: [], error: true };
   }
 }

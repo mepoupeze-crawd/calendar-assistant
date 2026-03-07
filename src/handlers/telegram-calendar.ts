@@ -24,7 +24,7 @@ export interface TelegramResponse {
   chat_id: string;
   message_id?: string;
   text: string;
-  buttons?: Array<{ text: string; callback_data: string }>;
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
   action?: 'send' | 'edit' | 'delete';
   event_id?: string;
   validated_event?: ValidatedEvent;
@@ -163,12 +163,15 @@ export async function resolveParticipantsAndPreview(
     return previewEvent(chat_id, event);
   }
 
-  const contacts = await lookupContactsByName(unresolved.name);
+  const { contacts, error } = await lookupContactsByName(unresolved.name);
 
   if (contacts.length === 0) {
+    const text = error
+      ? `⚠️ Não consegui acessar seus contatos.\n\nQual o email de <b>${unresolved.name}</b>?`
+      : `⚠️ Não encontrei "<b>${unresolved.name}</b>" nos seus contatos.\n\nQual o email?`;
     return {
       chat_id,
-      text: `⚠️ Não encontrei "<b>${unresolved.name}</b>" nos seus contatos.\n\nQual o email?`,
+      text,
       action: 'send',
       needsClarification: true,
       missingEmailFor: unresolved.name,
@@ -187,8 +190,8 @@ export async function resolveParticipantsAndPreview(
     chat_id,
     text: `👥 Encontrei ${contacts.length} contatos com o nome "<b>${unresolved.name}</b>":\n\n${optionsList}\n\nQual deles você quer adicionar?`,
     buttons: [
-      ...contacts.map((c, i) => ({ text: c.name, callback_data: `pick_contact_${i}` })),
-      { text: '✍️ Digitar email', callback_data: 'pick_contact_manual' },
+      ...contacts.map((c, i) => [{ text: c.name, callback_data: `pick_contact_${i}` }]),
+      [{ text: '✍️ Digitar email', callback_data: 'pick_contact_manual' }],
     ],
     action: 'send',
     contactChoice: { participantName: unresolved.name, options: contacts },
@@ -220,9 +223,11 @@ async function previewEvent(chat_id: string, event: ValidatedEvent): Promise<Tel
     chat_id,
     text: preview.text,
     buttons: [
-      { text: '✅ Confirmar', callback_data: `confirm_${preview.event_id}` },
-      { text: '❌ Cancelar', callback_data: `cancel_${preview.event_id}` },
-      { text: '✏️ Editar', callback_data: `edit_${preview.event_id}` },
+      [
+        { text: '✅ Confirmar', callback_data: `confirm_${preview.event_id}` },
+        { text: '❌ Cancelar', callback_data: `cancel_${preview.event_id}` },
+        { text: '✏️ Editar', callback_data: `edit_${preview.event_id}` },
+      ],
     ],
     action: 'send',
     event_id: preview.event_id,
