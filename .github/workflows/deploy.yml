@@ -27,7 +27,7 @@ jobs:
           mkdir -p dist
           npx esbuild src/bot.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bot.js
 
-      - name: Sync repo on VM
+      - name: Sync repository on VM
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
@@ -43,7 +43,7 @@ jobs:
             git reset --hard origin/main
             mkdir -p dist
 
-      - name: Copy built bundle to VM
+      - name: Copy bundle to VM
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VM_HOST }}
@@ -52,7 +52,33 @@ jobs:
           source: "dist/bot.js"
           target: "/opt/calendar-assistant/"
 
-      - name: Restart service
+      - name: Move bundle into dist folder
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: calendar
+          key: ${{ secrets.VM_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -e
+            cd /opt/calendar-assistant
+
+            if [ -f /opt/calendar-assistant/dist/bot.js ]; then
+              echo "dist/bot.js already exists"
+            elif [ -f /opt/calendar-assistant/bot.js ]; then
+              mv /opt/calendar-assistant/bot.js /opt/calendar-assistant/dist/bot.js
+            elif [ -f /opt/calendar-assistant/dist/dist/bot.js ]; then
+              mv /opt/calendar-assistant/dist/dist/bot.js /opt/calendar-assistant/dist/bot.js
+              rm -rf /opt/calendar-assistant/dist/dist
+            else
+              echo "ERROR: bot.js not found after copy"
+              exit 1
+            fi
+
+            chown -R calendar:calendar /opt/calendar-assistant/dist
+
+      - name: Restart service and show logs
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
@@ -65,4 +91,4 @@ jobs:
             sudo -n systemctl restart calendar-bot
             sleep 5
             sudo -n systemctl status calendar-bot --no-pager -l
-            journalctl -u calendar-bot -n 50 --no-pager
+            sudo -n journalctl -u calendar-bot -n 50 --no-pager
