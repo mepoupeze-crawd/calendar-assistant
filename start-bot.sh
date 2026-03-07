@@ -4,7 +4,7 @@
 # Prerequisites:
 # - OPENAI_API_KEY set
 # - TELEGRAM_BOT_TOKEN set (or in .env)
-# - gog configured: gog auth add mepoupz@gmail.com --services calendar
+# - gog configured: gog auth add mepoupeze@gmail.com --services calendar
 
 set -e
 
@@ -33,9 +33,9 @@ if ! command -v gog &> /dev/null; then
 fi
 
 # Check gog auth
-if ! gog calendar list -a mepoupz@gmail.com --plain &>/dev/null; then
+if ! gog calendar list -a mepoupeze@gmail.com --plain &>/dev/null; then
   echo "⚠️  gog not authenticated for mepoupz@gmail.com"
-  echo "Run: gog auth add mepoupz@gmail.com --services calendar"
+  echo "Run: gog auth add mepoupeze@gmail.com --services calendar"
   exit 1
 fi
 
