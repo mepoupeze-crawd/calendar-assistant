@@ -6,11 +6,28 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to VM
+    name: Build and Deploy to VM
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy via SSH
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build bot bundle
+        run: |
+          mkdir -p dist
+          npx esbuild src/bot.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bot.js
+
+      - name: Sync repo on VM
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
@@ -20,39 +37,32 @@ jobs:
           command_timeout: 20m
           script: |
             set -e
-
             cd /opt/calendar-assistant
-
-            echo "==> Fetching latest code..."
             git fetch origin
             git checkout main
             git reset --hard origin/main
-
-            echo "==> Installing dependencies..."
-            npm install
-
-            echo "==> Building bot bundle..."
             mkdir -p dist
-            npx --yes esbuild src/bot.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bot.js
 
-            echo "==> Restarting calendar-bot service..."
-            sudo -n systemctl restart calendar-bot
+      - name: Copy built bundle to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: calendar
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "dist/bot.js"
+          target: "/opt/calendar-assistant/"
 
-            echo "==> Waiting for service to stabilise..."
-            sleep 5
-
-            echo "==> Checking service status..."
-            sudo -n systemctl status calendar-bot --no-pager -l
-            if sudo -n systemctl is-failed --quiet calendar-bot; then
-              echo "ERROR: calendar-bot service is in a failed state." >&2
-              exit 1
-            fi
-
-      - name: Show last 50 log lines
+      - name: Restart service
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
           username: calendar
           key: ${{ secrets.VM_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
           script: |
+            set -e
+            sudo -n systemctl restart calendar-bot
+            sleep 5
+            sudo -n systemctl status calendar-bot --no-pager -l
             journalctl -u calendar-bot -n 50 --no-pager
