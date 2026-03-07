@@ -260,7 +260,7 @@ describe('Calendar Agent - Phase 1 Pipeline', () => {
 
       const preview = generatePreview(event, conflicts);
 
-      expect(preview.text).toContain('⚠️ **Conflito');
+      expect(preview.text).toContain('⚠️ Conflito:');
       expect(preview.text).toContain('Standup');
     });
   });

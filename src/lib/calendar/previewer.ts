@@ -45,63 +45,55 @@ export function generatePreview(
 }
 
 /**
- * Build preview message text
+ * Build preview message text (HTML format for Telegram parse_mode: 'HTML')
  */
 function buildPreviewText(event: ValidatedEvent, conflicts?: ConflictInfo[]): string {
   const lines: string[] = [];
 
-  // Header
-  lines.push('📅 **Evento**');
+  // Title
+  lines.push(`📅 <b>${escapeHtml(event.title)}</b>`);
   lines.push('');
 
-  // Title
-  lines.push(`**Título:** ${escapeMarkdown(event.title)}`);
-
-  // Date + Day of week
+  // Date + time on one line
   const dayOfWeek = getDayOfWeek(event.start_date);
-  lines.push(
-    `**Data:** ${dayOfWeek}, ${formatDatePT(event.start_date)}`
-  );
-
-  // Time or All-day
+  const datePart = `🗓 ${dayOfWeek}, ${formatDatePT(event.start_date)}`;
   if (event.all_day) {
-    lines.push(`**Horário:** O dia todo`);
+    lines.push(`${datePart}  ·  🌅 O dia todo`);
   } else {
     const timeStr = formatTimeRange(event.start_time, event.end_time, event.duration_minutes);
-    lines.push(`**Horário:** ${timeStr}`);
+    lines.push(`${datePart}  ·  ⏰ ${timeStr}`);
   }
 
-  // Participants
+  // Location (omit if null/empty)
+  if (event.location && event.location.trim().length > 0) {
+    lines.push(`📍 ${escapeHtml(event.location)}`);
+  }
+
+  // Participants (omit if none)
   if (event.participants && event.participants.length > 0) {
     const participantStr = formatParticipants(event.participants);
-    lines.push(`**Participantes:** ${participantStr}`);
+    lines.push(`👥 ${participantStr}`);
   }
 
-  // Description (if present)
+  // Description (omit if null/empty, truncate at 200 chars)
   if (event.description && event.description.trim().length > 0) {
     const desc = truncate(event.description, 200);
-    lines.push(`**Descrição:** ${escapeMarkdown(desc)}`);
+    lines.push(`📝 ${escapeHtml(desc)}`);
   }
 
-  // Location (if present)
-  if (event.location && event.location.trim().length > 0) {
-    lines.push(`**Local:** ${escapeMarkdown(event.location)}`);
-  }
-
-  // Conflict warning
+  // Conflict warnings (blank line before block if present)
   if (conflicts && conflicts.length > 0) {
     lines.push('');
-    lines.push('⚠️ **Conflito Detectado:**');
     conflicts.forEach((c) => {
       lines.push(
-        `• ${escapeMarkdown(c.title)} (${c.start_time}–${c.end_time})`
+        `⚠️ Conflito: <b>${escapeHtml(c.title)}</b> (${c.start_time}–${c.end_time})`
       );
     });
   }
 
   // Footer
   lines.push('');
-  lines.push('_Confirme, edite ou cancele:_');
+  lines.push('Confirme o evento:');
 
   return lines.join('\n');
 }
@@ -202,27 +194,11 @@ function formatParticipants(participants: Array<{ name: string; email?: string |
   return names;
 }
 
-function escapeMarkdown(text: string): string {
-  // Escape special markdown chars for Telegram
+function escapeHtml(text: string): string {
   return text
-    .replace(/\\/g, '\\\\')
-    .replace(/\*/g, '\\*')
-    .replace(/_/g, '\\_')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-    .replace(/~/g, '\\~')
-    .replace(/`/g, '\\`')
-    .replace(/>/g, '\\>')
-    .replace(/#/g, '\\#')
-    .replace(/\+/g, '\\+')
-    .replace(/\-/g, '\\-')
-    .replace(/\=/g, '\\=')
-    .replace(/\|/g, '\\|')
-    .replace(/\{/g, '\\{')
-    .replace(/\}/g, '\\}')
-    .replace(/\./g, '\\.');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function truncate(text: string, maxLength: number): string {
@@ -247,7 +223,7 @@ export function buildEditMenu(eventId: string): {
   text: string;
   keyboard: InlineKeyboard;
 } {
-  const text = '✏️ **Qual campo deseja editar?**\n\n_Clique abaixo para alterar:_';
+  const text = '✏️ <b>Qual campo deseja editar?</b>\n\nClique abaixo para alterar:';
 
   const keyboard: InlineKeyboard = {
     buttons: [
