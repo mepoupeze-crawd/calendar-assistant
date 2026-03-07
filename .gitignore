@@ -3,3 +3,5 @@ node_modules
 credentials/
 dist/
 .onboard.md
+gh-actions-key
+gh-actions-key.pub

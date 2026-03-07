@@ -2,14 +2,12 @@ name: Deploy
 
 on:
   push:
-    branches:
-      - master
+    branches: [main]
 
 jobs:
   deploy:
     name: Deploy to VM
     runs-on: ubuntu-latest
-    continue-on-error: false
 
     steps:
       - name: Deploy via SSH
@@ -18,35 +16,43 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: calendar
           key: ${{ secrets.VM_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
           script: |
             set -e
 
             cd /opt/calendar-assistant
 
-            echo "==> Pulling latest code..."
-            git pull origin main
+            echo "==> Fetching latest code..."
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
 
-            echo "==> Installing production dependencies..."
-            npm install --omit=dev
+            echo "==> Installing dependencies..."
+            npm install
+
+            echo "==> Building bot bundle..."
+            mkdir -p dist
+            npx --yes esbuild src/bot.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bot.js
 
             echo "==> Restarting calendar-bot service..."
-            sudo systemctl restart calendar-bot
+            sudo -n systemctl restart calendar-bot
 
             echo "==> Waiting for service to stabilise..."
             sleep 5
 
             echo "==> Checking service status..."
-            sudo systemctl status calendar-bot --no-pager -l
-            if sudo systemctl is-failed --quiet calendar-bot; then
+            sudo -n systemctl status calendar-bot --no-pager -l
+            if sudo -n systemctl is-failed --quiet calendar-bot; then
               echo "ERROR: calendar-bot service is in a failed state." >&2
               exit 1
             fi
 
-      - name: Show last 20 log lines
+      - name: Show last 50 log lines
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VM_HOST }}
           username: calendar
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
-            journalctl -u calendar-bot -n 20 --no-pager
+            journalctl -u calendar-bot -n 50 --no-pager
