@@ -115,8 +115,9 @@ export class ConversationStore {
   /**
    * Stores the Google Calendar event ID of the most recently created event for `chatId`.
    * Allows the agent to reference the real event ID when the user requests edits.
+   * Pass `undefined` to clear stale event IDs after a successful update.
    */
-  setLastCreatedEventId(chatId: string, eventId: string): void {
+  setLastCreatedEventId(chatId: string, eventId: string | undefined): void {
     const state = this.getOrCreate(chatId);
     state.lastCreatedEventId = eventId;
     state.lastUsed = Date.now();

@@ -167,6 +167,13 @@ describe('ConversationStore', () => {
       expect(store.get('c')?.lastCreatedEventId).toBe('abc-123');
     });
 
+    it('overwrites with a second call', () => {
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 20 });
+      store.setLastCreatedEventId('c', 'id-1');
+      store.setLastCreatedEventId('c', 'id-2');
+      expect(store.get('c')?.lastCreatedEventId).toBe('id-2');
+    });
+
     it('clear removes lastCreatedEventId', () => {
       const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 20 });
       store.setLastCreatedEventId('c', 'abc-123');

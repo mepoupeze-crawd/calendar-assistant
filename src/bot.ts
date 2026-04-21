@@ -375,6 +375,7 @@ async function handleUpdate(update: any): Promise<void> {
         try {
           const { event_link } = await updateEvent(op.google_event_id, op.patch as any);
           pendingOpsStore.delete(opId);
+          conversationStore.setLastCreatedEventId(chatIdStr, undefined);
           await sendMessage(chatIdStr, `✅ Atualizado: <b>${op.summary}</b>\n🔗 ${event_link}`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
