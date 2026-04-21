@@ -122,3 +122,122 @@ describe('runAgentTurn', () => {
     });
   });
 });
+
+describe('anti-regression: name inside quoted title is NOT extracted as participant', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
+      chat: { completions: { create: mockCreate } },
+    } as any));
+
+    conversationStore.clear('chat-regression');
+    conversationStore.clear('chat-regression-2');
+  });
+
+  it('when LLM proposes event with Aline but not Manuela from title, agent calls propose_event correctly', async () => {
+    // Simulate the LLM correctly calling propose_event with ONLY Aline as participant
+    // (Manuela appears in the title "aniversário Manuela Frego" — NOT as participant)
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'tc1',
+            type: 'function',
+            function: {
+              name: 'propose_event',
+              arguments: JSON.stringify({
+                title: 'aniversário Manuela Frego',
+                start_date: '2026-05-23',
+                start_time: '13:30',
+                participants: [{ name: 'Aline', email: null }],  // only Aline, NOT Manuela
+              }),
+            },
+          }, {
+            id: 'tc2',
+            type: 'function',
+            function: {
+              name: 'show_preview',
+              arguments: '{}',
+            },
+          }],
+        },
+      }],
+    });
+
+    const response = await runAgentTurn(
+      'chat-regression',
+      'Adicionar Aline e mudar nome do evento para "aniversário Manuela Frego"'
+    );
+
+    // Verify the conversation store has the draft
+    const state = conversationStore.get('chat-regression');
+    expect(state).not.toBeNull();
+
+    // The draft should have Aline but NOT Manuela as participant
+    const participantNames = state?.draft?.participants.map(p => p.name) ?? [];
+    expect(participantNames).toContain('Aline');
+    expect(participantNames).not.toContain('Manuela');
+    expect(participantNames).not.toContain('Manuela Frego');
+
+    // Title should be set correctly
+    expect(state?.draft?.title).toBe('aniversário Manuela Frego');
+  });
+
+  it('when user corrects a wrong participant ("Manuela nao é a pessoa"), agent removes them', async () => {
+    // Setup: draft already has Manuela incorrectly added
+    const store = conversationStore.getOrCreate('chat-regression-2');
+    store.draft = {
+      title: 'aniversário Manuela Frego',
+      start_date: '2026-05-23',
+      start_time: '13:30',
+      end_time: null,
+      duration_minutes: null,
+      all_day: false,
+      participants: [{ name: 'Manuela', email: null, resolved: false }],
+      description: null,
+      location: null,
+    };
+
+    // LLM correctly calls remove_participant then ask_user
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'tc3',
+            type: 'function',
+            function: {
+              name: 'remove_participant',
+              arguments: JSON.stringify({ name: 'Manuela' }),
+            },
+          }, {
+            id: 'tc4',
+            type: 'function',
+            function: {
+              name: 'reply_text',
+              arguments: JSON.stringify({ text: 'Ok, removi Manuela. Quem você quer adicionar?' }),
+            },
+          }],
+        },
+      }],
+    });
+
+    const response = await runAgentTurn(
+      'chat-regression-2',
+      'Manuela nao é a pessoa a ser adicionada'
+    );
+
+    // Manuela should be removed from participants
+    const state = conversationStore.get('chat-regression-2');
+    const participantNames = state?.draft?.participants.map(p => p.name) ?? [];
+    expect(participantNames).not.toContain('Manuela');
+
+    // Response should be the reply_text content
+    expect(response.text).toBe('Ok, removi Manuela. Quem você quer adicionar?');
+  });
+});
