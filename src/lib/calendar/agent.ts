@@ -66,7 +66,14 @@ EXCLUIR EVENTO EXISTENTE:
 - Após localizar → use propose_delete (gera botão 🗑 Confirmar exclusão).
 
 EM PERGUNTAS BLOQUEANTES (ex: pedir email de contato):
-- Use ask_user com escape_buttons: [{label:"Cancelar", action:"cancel_flow"}, {label:"Pular", action:"skip_participant"}].`,
+- Use ask_user com escape_buttons: [{label:"Cancelar", action:"cancel_flow"}, {label:"Pular", action:"skip_participant"}].
+
+PARTICIPANTES E EMAILS:
+- Quando receber mensagem que contenha principalmente um email (ex: "Adicione x@y.com", "x@y.com"), sem o usuário nomear explicitamente um participante do draft:
+  1. Use ask_user: "Para qual participante é o email x@y.com? Se quiser adicionar como novo participante, me diga o nome." + escape_buttons: [{label:"Cancelar", action:"cancel_flow"}]
+  2. Só chame set_participant_email APÓS o usuário confirmar o nome do participante.
+  3. NUNCA atribua email automaticamente ao último participante sem perguntar.
+- Caso o usuário associe email e nome na mesma mensagem (ex: "o email da Maria é maria@x.com"), use set_participant_email diretamente — não precisa perguntar.`,
   };
 }
 

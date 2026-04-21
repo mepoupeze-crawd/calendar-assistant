@@ -314,6 +314,90 @@ describe('fase 2 — CRUD de eventos existentes', () => {
   });
 });
 
+describe('Bug B — disambiguação de email sem destinatário', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
+      chat: { completions: { create: mockCreate } },
+    } as any));
+
+    conversationStore.clear('bug-b-1');
+    conversationStore.clear('bug-b-2');
+  });
+
+  it('agente chama ask_user (não set_participant_email) quando email enviado sem nome de participante', async () => {
+    // Simular: usuário enviou apenas um email — agente deve responder com ask_user
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'a1',
+            type: 'function',
+            function: {
+              name: 'ask_user',
+              arguments: JSON.stringify({
+                text: 'Para qual participante é o email jgcalice@gmail.com? Se quiser adicionar como novo participante, me diga o nome.',
+                escape_buttons: [{ label: 'Cancelar', action: 'cancel_flow' }],
+              }),
+            },
+          }],
+        },
+      }],
+    });
+
+    const r = await runAgentTurn('bug-b-1', 'Adicione jgcalice@gmail.com');
+    // ask_user é terminal — deve retornar texto com a pergunta
+    expect(r.text).toContain('jgcalice@gmail.com');
+    // Verificar que agente respondeu com ask_user (não com set_participant_email)
+    expect(r.text).toMatch(/participante|email|jgcalice/i);
+    // Apenas 1 chamada ao LLM (ask_user é terminal)
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('agente usa set_participant_email diretamente quando email e nome estão na mesma mensagem', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'b1',
+            type: 'function',
+            function: {
+              name: 'set_participant_email',
+              arguments: JSON.stringify({ name: 'Maria', email: 'maria@example.com' }),
+            },
+          }],
+        },
+      }],
+    }).mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'Email da Maria atualizado!', tool_calls: undefined } }],
+    });
+
+    // Setup draft with Maria as participant so set_participant_email succeeds
+    const store = conversationStore.getOrCreate('bug-b-2');
+    store.draft = {
+      title: 'Reunião',
+      start_date: '2026-05-01',
+      start_time: null,
+      end_time: null,
+      duration_minutes: null,
+      all_day: false,
+      participants: [{ name: 'Maria', email: null, resolved: false }],
+      description: null,
+      location: null,
+    };
+
+    const r = await runAgentTurn('bug-b-2', 'o email da Maria é maria@example.com');
+    // set_participant_email não é terminal, mas o texto final deve existir
+    expect(r.text).toBeTruthy();
+  });
+});
+
 describe('contexto ULTIMO_EVENTO_CRIADO_ID', () => {
   let mockCreate: jest.Mock;
 

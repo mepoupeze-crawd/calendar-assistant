@@ -126,7 +126,7 @@ export const TOOL_SCHEMAS: Array<{
     type: 'function',
     function: {
       name: 'set_participant_email',
-      description: "Set or update a participant's email address in the current draft.",
+      description: 'Define o email de um participante já presente no draft. Use SOMENTE quando o usuário associou explicitamente o email a um nome (ex: "o email da Maria é x@y.com"). Se o usuário enviou apenas um email sem nomear o participante, use ask_user primeiro para disambiguar.',
       parameters: {
         type: 'object',
         required: ['name', 'email'],
