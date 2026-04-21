@@ -202,6 +202,10 @@ function buildClarificationRequest(ambiguities: string[]): string {
  * Helper: Build clarification request from validation errors
  */
 function buildClarificationFromErrors(errors: string[]): string {
+  const maxDate = new Date();
+  maxDate.setFullYear(maxDate.getFullYear() + 1);
+  const maxDateStr = maxDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
   const errorMessages: { [key: string]: string } = {
     title_missing: 'Qual é o título do evento?',
     date_missing: 'Que dia será? (ex: 25/02)',
@@ -210,7 +214,7 @@ function buildClarificationFromErrors(errors: string[]): string {
     date_format_invalid: 'Data em formato inválido',
     time_format_invalid: 'Horário em formato inválido (use HH:MM)',
     end_time_format_invalid: 'Hora final em formato inválido (use HH:MM)',
-    date_too_far_future: 'Data muito distante (máx 1 ano no futuro)',
+    date_too_far_future: `⚠️ Só consigo agendar até ${maxDateStr}. Tente uma data anterior.`,
     date_out_of_range: 'Data inválida',
     time_end_before_start: 'Hora final deve ser depois da hora inicial',
   };

@@ -12,6 +12,7 @@ import fetch from 'node-fetch';
 import { handleTelegramInput, handleConfirmation, handleCancellation, resolveParticipantsAndPreview, setParticipantEmail } from './handlers/telegram-calendar';
 import type { TelegramMessage, TelegramResponse } from './handlers/telegram-calendar';
 import type { ValidatedEvent } from './lib/calendar/types';
+import { PersistentEventCache } from './lib/calendar/event-cache';
 
 dotenv.config();
 
@@ -27,7 +28,7 @@ if (!TELEGRAM_BOT_TOKEN) {
 console.log(`[Bot] Configured to respond only in chat: ${ALLOWED_CHAT_ID}`);
 
 let lastUpdateId = 0;
-const eventCache: Map<string, any> = new Map(); // event_id → { message, validated_event }
+const eventCache = new PersistentEventCache(); // persiste em data/event-cache.json
 
 // ─── Conversation Session (Fix #3) ────────────────────────────────────────────
 // Tracks accumulated user messages per chat for multi-turn clarification.
@@ -35,17 +36,20 @@ const eventCache: Map<string, any> = new Map(); // event_id → { message, valid
 // original text so the LLM always has full context.
 
 interface ChatSession {
-  texts: string[];    // user messages accumulated in this session (original, not combined)
+  texts: string[];
   createdAt: number;
+  timerId: NodeJS.Timeout;
 }
 const chatSessions = new Map<string, ChatSession>();
 const SESSION_TTL_MS = 5 * 60 * 1000; // sessions expire after 5 min of inactivity
+const CONTACT_EMAIL_TTL_MS = 10 * 60 * 1000; // 10 minutos para informar email
 
 /** Returns the combined context string for a chat, or null if no active session. */
 function getSessionContext(chatId: string): string | null {
   const session = chatSessions.get(chatId);
   if (!session) return null;
   if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    clearTimeout(session.timerId);
     chatSessions.delete(chatId);
     return null;
   }
@@ -57,17 +61,51 @@ function appendToSession(chatId: string, text: string): void {
   const existing = chatSessions.get(chatId);
   if (existing && Date.now() - existing.createdAt <= SESSION_TTL_MS) {
     existing.texts.push(text);
-  } else {
-    chatSessions.set(chatId, { texts: [text], createdAt: Date.now() });
+    return;
   }
+  // Cancelar timer anterior se existir
+  if (existing) clearTimeout(existing.timerId);
+
+  const timerId = setTimeout(async () => {
+    chatSessions.delete(chatId);
+    await sendMessage(chatId, '⏰ Sessão expirou. Envie o evento completo novamente.');
+  }, SESSION_TTL_MS);
+
+  chatSessions.set(chatId, { texts: [text], createdAt: Date.now(), timerId });
 }
 
 /** Clears all pending state (session + edit + contact resolution) for a chat. */
 function clearChatState(chatId: string): void {
+  const session = chatSessions.get(chatId);
+  if (session) clearTimeout(session.timerId);
   chatSessions.delete(chatId);
   pendingEdits.delete(chatId);
   pendingContactPicks.delete(chatId);
+  const pendingEmail = pendingContactEmails.get(chatId);
+  if (pendingEmail) clearTimeout(pendingEmail.timerId);
   pendingContactEmails.delete(chatId);
+}
+
+function setPendingContactEmail(chatIdStr: string, chatId: any, name: string, partialEvent: ValidatedEvent): void {
+  const existing = pendingContactEmails.get(chatIdStr);
+  if (existing) clearTimeout(existing.timerId);
+
+  const timerId = setTimeout(async () => {
+    const pending = pendingContactEmails.get(chatIdStr);
+    if (!pending) return;
+    pendingContactEmails.delete(chatIdStr);
+    const eventWithout = {
+      ...pending.partialEvent,
+      participants: pending.partialEvent.participants.filter(p => p.name !== pending.name),
+    };
+    await sendMessage(chatIdStr, `⏰ Tempo esgotado — <b>${pending.name}</b> não foi adicionado. Criando evento sem ele.`);
+    const resp = await resolveParticipantsAndPreview(chatIdStr, eventWithout);
+    await dispatchContactResponse(chatIdStr, chatId, resp);
+  }, CONTACT_EMAIL_TTL_MS);
+
+  pendingContactEmails.set(chatIdStr, { name, partialEvent, timerId });
+  chatSessions.delete(chatIdStr);
+  console.log(`[Bot] Waiting for email for "${name}" (timeout: 10min)`);
 }
 
 /**
@@ -98,12 +136,7 @@ async function dispatchContactResponse(
     chatSessions.delete(chatIdStr);
     console.log(`[Bot] Contact pick pending: "${response.contactChoice.participantName}" (${response.contactChoice.options.length} options)`);
   } else if (response.missingEmailFor && response.validated_event) {
-    pendingContactEmails.set(chatIdStr, {
-      name: response.missingEmailFor,
-      partialEvent: response.validated_event,
-    });
-    chatSessions.delete(chatIdStr);
-    console.log(`[Bot] Waiting for email for "${response.missingEmailFor}"`);
+    setPendingContactEmail(chatIdStr, chatId, response.missingEmailFor, response.validated_event);
   }
 }
 
@@ -125,10 +158,15 @@ interface PendingContactPick {
 const pendingContactPicks = new Map<string, PendingContactPick>();   // chat_id → pick
 
 interface PendingContactEmail {
-  name: string;             // participant name we're waiting an email for
+  name: string;
   partialEvent: ValidatedEvent;
+  timerId: NodeJS.Timeout;
 }
 const pendingContactEmails = new Map<string, PendingContactEmail>(); // chat_id → email
+
+// ─── Processing Mutex ─────────────────────────────────────────────────────────
+// Prevents race conditions when user sends messages in rapid succession.
+const isProcessing = new Set<string>();
 
 /** Converts a ValidatedEvent back to a natural-language string for the LLM. */
 function eventToText(event: ValidatedEvent): string {
@@ -307,6 +345,13 @@ async function handleUpdate(update: any): Promise<void> {
 
     // ── Incoming message (text / voice / photo) ──────────────────────────────
     if (update.message) {
+      // ── Step 0: Mutex — prevent parallel processing ──────────────────────
+      if (isProcessing.has(chatIdStr)) {
+        await sendMessage(chatIdStr, '⏳ Ainda processando sua mensagem anterior. Aguarde.');
+        return;
+      }
+      isProcessing.add(chatIdStr);
+      try {
       // ── Step 1: Resolve raw text from message type ───────────────────────
       let rawText = '';
 
@@ -321,8 +366,7 @@ async function handleUpdate(update: any): Promise<void> {
           console.log(`[Bot] Voice transcribed: "${rawText.substring(0, 60)}"`);
           await sendMessage(chatIdStr, `🎤 <i>"${rawText}"</i>`);
         } catch (err) {
-          const e = err instanceof Error ? err.message : String(err);
-          await sendMessage(chatIdStr, `❌ Erro ao transcrever áudio: ${e}`);
+          await sendMessage(chatIdStr, `❌ Não consegui transcrever o áudio.\n\nTente escrever o evento em texto. Ex: <i>"reunião com João amanhã às 14h"</i>`);
           return;
         }
 
@@ -341,8 +385,7 @@ async function handleUpdate(update: any): Promise<void> {
           }
           await sendMessage(chatIdStr, `🖼 <i>"${rawText}"</i>`);
         } catch (err) {
-          const e = err instanceof Error ? err.message : String(err);
-          await sendMessage(chatIdStr, `❌ Erro ao processar imagem: ${e}`);
+          await sendMessage(chatIdStr, `❌ Não consegui ler a imagem.\n\nTente descrever o evento em texto. Ex: <i>"reunião com João amanhã às 14h"</i>`);
           return;
         }
 
@@ -364,6 +407,7 @@ async function handleUpdate(update: any): Promise<void> {
           await sendMessage(chatIdStr, `❌ "${email}" não parece um email válido.\nQual o email de <b>${pendingEmail.name}</b>?`);
           return; // keep pendingContactEmails set
         }
+        clearTimeout(pendingEmail.timerId);
         pendingContactEmails.delete(chatIdStr);
         const updated = setParticipantEmail(pendingEmail.partialEvent, pendingEmail.name, email);
         await dispatchContactResponse(chatIdStr, chatId, await resolveParticipantsAndPreview(chatIdStr, updated));
@@ -409,7 +453,12 @@ async function handleUpdate(update: any): Promise<void> {
       };
 
       const response = await handleTelegramInput(telegramMsg);
-      await sendMessage(response.chat_id, response.text, response.buttons);
+
+      // F2: Add session TTL hint to clarification messages
+      const responseText = response.needsClarification
+        ? `${response.text}\n\n⏳ Você tem ${Math.round(SESSION_TTL_MS / 60000)} minutos para responder.`
+        : response.text;
+      await sendMessage(response.chat_id, responseText, response.buttons);
 
       if (response.event_id && response.validated_event && response.buttons) {
         // Valid preview — clear pending state, cache the event
@@ -430,19 +479,16 @@ async function handleUpdate(update: any): Promise<void> {
         chatSessions.delete(chatIdStr);
         console.log(`[Bot] Contact pick pending: "${response.contactChoice.participantName}" (${response.contactChoice.options.length} options)`);
       } else if (response.missingEmailFor && response.validated_event) {
-        // No contact found — waiting for user to type the email
-        pendingContactEmails.set(chatIdStr, {
-          name: response.missingEmailFor,
-          partialEvent: response.validated_event,
-        });
-        chatSessions.delete(chatIdStr);
-        console.log(`[Bot] Waiting for email for "${response.missingEmailFor}"`);
+        setPendingContactEmail(chatIdStr, chatId, response.missingEmailFor, response.validated_event);
       } else if (response.needsClarification) {
         // Regular ambiguous input — accumulate in session
         appendToSession(chatIdStr, rawText);
         console.log(`[Bot] Clarification needed — session now has ${chatSessions.get(chatIdStr)?.texts.length} messages`);
       }
       // NOTE: on parse error we intentionally keep session alive.
+      } finally {
+        isProcessing.delete(chatIdStr);
+      }
     }
 
     // ── Button callback ──────────────────────────────────────────────────────
@@ -468,8 +514,10 @@ async function handleUpdate(update: any): Promise<void> {
           console.log(`[Bot] Cleared cache for ${eventId}`);
         } catch (error) {
           const err = error instanceof Error ? error.message : 'Unknown error';
+          eventCache.delete(eventId);
+          clearChatState(chatIdStr);
           await answerCallbackQuery(queryId, '❌ Erro ao criar evento');
-          await sendMessage(chatIdStr, `❌ Erro: ${err}`);
+          await sendMessage(chatIdStr, `❌ Erro: ${err}\n\nTente enviar o evento novamente.`);
         }
 
       } else if (callbackData.startsWith('cancel_')) {
@@ -494,8 +542,8 @@ async function handleUpdate(update: any): Promise<void> {
         if (suffix === 'manual') {
           await answerCallbackQuery(queryId, '✍️ Ok');
           pendingContactPicks.delete(chatIdStr);
-          pendingContactEmails.set(chatIdStr, { name: pending.name, partialEvent: pending.partialEvent });
-          await sendMessage(chatIdStr, `✍️ Qual o email de <b>${pending.name}</b>?`);
+          setPendingContactEmail(chatIdStr, chatId, pending.name, pending.partialEvent);
+          await sendMessage(chatIdStr, `✍️ Qual o email de <b>${pending.name}</b>?\n\n<i>Ou clique em ⏭ Pular para criar o evento sem este participante.</i>`, [[{ text: `⏭ Pular ${pending.name}`, callback_data: 'skip_contact_email' }]]);
           return;
         }
 
@@ -510,6 +558,24 @@ async function handleUpdate(update: any): Promise<void> {
         pendingContactPicks.delete(chatIdStr);
         const updated = setParticipantEmail(pending.partialEvent, pending.name, selected.email);
         await dispatchContactResponse(chatIdStr, chatId, await resolveParticipantsAndPreview(chatIdStr, updated));
+
+      } else if (callbackData === 'skip_contact_email') {
+        const pending = pendingContactEmails.get(chatIdStr);
+        if (!pending) {
+          await answerCallbackQuery(queryId, '⏰ Expirou. Envie o evento novamente.');
+          await sendMessage(chatIdStr, '⏰ Escolha expirou. Por favor envie o evento novamente.');
+          return;
+        }
+        clearTimeout(pending.timerId);
+        pendingContactEmails.delete(chatIdStr);
+        await answerCallbackQuery(queryId, `⏭ ${pending.name} pulado`);
+        const eventWithout = {
+          ...pending.partialEvent,
+          participants: pending.partialEvent.participants.filter(p => p.name !== pending.name),
+        };
+        await sendMessage(chatIdStr, `⏭ <b>${pending.name}</b> não foi adicionado ao evento.`);
+        const resp = await resolveParticipantsAndPreview(chatIdStr, eventWithout);
+        await dispatchContactResponse(chatIdStr, chatId, resp);
 
       } else if (callbackData.startsWith('edit_')) {
         // ── Edit button (Fix #2) ────────────────────────────────────────────
@@ -571,4 +637,8 @@ async function poll(): Promise<void> {
   }
 }
 
-poll().catch(console.error);
+async function main() {
+  await eventCache.load();
+  poll().catch(console.error);
+}
+main().catch(console.error);
