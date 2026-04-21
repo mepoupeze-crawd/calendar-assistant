@@ -397,6 +397,12 @@ async function handleUpdate(update: any): Promise<void> {
 
       } else if (callbackData.startsWith('abort_op_')) {
         const opId = callbackData.replace('abort_op_', '');
+        const op = pendingOpsStore.get(opId);
+        if (!op) {
+          await answerCallbackQuery(queryId, '⏰ Expirou');
+          await sendMessage(chatIdStr, '⏰ Operação já expirou ou foi processada.');
+          return;
+        }
         pendingOpsStore.delete(opId);
         await answerCallbackQuery(queryId, '✗ Cancelado');
         await sendMessage(chatIdStr, '✗ Operação cancelada.');
