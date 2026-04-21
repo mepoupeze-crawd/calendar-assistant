@@ -33,10 +33,12 @@ const MAX_ITERATIONS = 5;
 
 function buildSystemPrompt(): AgentMessage {
   const today = new Date().toISOString().split('T')[0];
+  const ownerEmail = process.env.CALENDAR_OWNER_EMAIL || 'jgcalice@gmail.com';
   return {
     role: 'system',
     content: `Você é um assistente de calendário em português brasileiro.
 Data atual: ${today}.
+Usuário do calendário: ${ownerEmail}
 
 Você pode: criar eventos, editar o rascunho atual, E consultar/atualizar/excluir eventos existentes no Google Calendar.
 
@@ -73,7 +75,17 @@ PARTICIPANTES E EMAILS:
   1. Use ask_user: "Para qual participante é o email x@y.com? Se quiser adicionar como novo participante, me diga o nome." + escape_buttons: [{label:"Cancelar", action:"cancel_flow"}]
   2. Só chame set_participant_email APÓS o usuário confirmar o nome do participante.
   3. NUNCA atribua email automaticamente ao último participante sem perguntar.
-- Caso o usuário associe email e nome na mesma mensagem (ex: "o email da Maria é maria@x.com"), use set_participant_email diretamente — não precisa perguntar.`,
+- Caso o usuário associe email e nome na mesma mensagem (ex: "o email da Maria é maria@x.com"), use set_participant_email diretamente — não precisa perguntar.
+
+ADICIONAR PARTICIPANTE POR NOME:
+- Após chamar add_participant, SEMPRE chame lookup_contact imediatamente com o mesmo nome.
+  • Se lookup retornar 1 contato: chame set_participant_email com o email encontrado.
+  • Se lookup retornar 0 contatos: use ask_user "Não encontrei [nome] nos seus contatos. Qual é o email?" + escape_buttons [{label:"Pular", action:"skip_participant"}, {label:"Cancelar", action:"cancel_flow"}].
+  • Se lookup retornar >1 contato: use ask_user listando as opções numeradas para o usuário escolher.
+- NUNCA encerre o turno com participante adicionado e sem email resolvido.
+
+MEU EMAIL / ADICIONAR EU MESMO:
+- "meu email", "me adiciona", "inclua eu", "eu também" → use set_participant_email com email="${ownerEmail}" para o participante correspondente, ou add_participant("eu") + set_participant_email("eu", "${ownerEmail}") se ainda não estiver no draft. NÃO peça confirmação.`,
   };
 }
 

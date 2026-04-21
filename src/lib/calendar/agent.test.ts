@@ -398,6 +398,34 @@ describe('Bug B — disambiguação de email sem destinatário', () => {
   });
 });
 
+describe('contexto do owner no system prompt', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
+      chat: { completions: { create: mockCreate } },
+    } as any));
+
+    conversationStore.clear('chat-owner-test');
+  });
+
+  it('inclui email do owner no sistema quando CALENDAR_OWNER_EMAIL está definido', async () => {
+    process.env.CALENDAR_OWNER_EMAIL = 'test-owner@example.com';
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'ok' } }],
+    });
+    await runAgentTurn('chat-owner-test', 'oi');
+    const callArgs = mockCreate.mock.calls[0][0];
+    const systemMsgs = callArgs.messages.filter((m: any) => m.role === 'system');
+    const hasOwnerEmail = systemMsgs.some((m: any) =>
+      m.content?.includes('test-owner@example.com')
+    );
+    expect(hasOwnerEmail).toBe(true);
+    delete process.env.CALENDAR_OWNER_EMAIL;
+  });
+});
+
 describe('contexto ULTIMO_EVENTO_CRIADO_ID', () => {
   let mockCreate: jest.Mock;
 

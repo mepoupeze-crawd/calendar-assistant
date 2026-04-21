@@ -274,7 +274,7 @@ async function handleUpdate(update: any): Promise<void> {
         }
       } catch (err) {
         console.error('[Bot/Agent] error', err);
-        await sendMessage(chatIdStr, '❌ Erro no agente. Tente /new e envie de novo.');
+        await sendMessage(chatIdStr, '⚠️ Não consegui processar isso. Pode tentar reformular ou enviar de forma diferente?');
       }
       } finally {
         isProcessing.delete(chatIdStr);

@@ -98,7 +98,7 @@ export const TOOL_SCHEMAS: Array<{
     type: 'function',
     function: {
       name: 'add_participant',
-      description: 'Add a participant to the current event draft.',
+      description: 'Adiciona um participante ao draft por nome. SEMPRE chame lookup_contact imediatamente após, com o mesmo nome, para tentar resolver o email automaticamente.',
       parameters: {
         type: 'object',
         required: ['name'],
