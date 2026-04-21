@@ -38,14 +38,16 @@ const EXPECTED_TOOL_NAMES = [
 ];
 
 describe('agent-tools', () => {
-  describe('1. TOOL_SCHEMAS contains exactly the 9 expected tool names', () => {
-    it('has exactly 9 schemas', () => {
-      expect(TOOL_SCHEMAS).toHaveLength(9);
+  describe('1. TOOL_SCHEMAS contains the expected tool names', () => {
+    it('has at least 9 original schemas', () => {
+      expect(TOOL_SCHEMAS.length).toBeGreaterThanOrEqual(9);
     });
 
-    it('contains all expected tool names', () => {
+    it('contains all original expected tool names', () => {
       const names = TOOL_SCHEMAS.map((s) => s.function.name);
-      expect(names.sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
+      for (const expectedName of EXPECTED_TOOL_NAMES) {
+        expect(names).toContain(expectedName);
+      }
     });
   });
 
@@ -212,5 +214,70 @@ describe('tool: show_preview (no draft)', () => {
     const state = makeState();
     const r = await (getToolHandler('show_preview')!)({}, state, { chatId: 'c' });
     expect(r.terminal?.text).toMatch(/sem evento/i);
+  });
+});
+
+describe('phase-2 tools', () => {
+  it('TOOL_SCHEMAS now contains 13 tools (9 original + 4 new)', () => {
+    const names = TOOL_SCHEMAS.map(t => t.function.name).sort();
+    expect(names).toContain('list_upcoming_events');
+    expect(names).toContain('search_events');
+    expect(names).toContain('propose_update');
+    expect(names).toContain('propose_delete');
+    expect(names).toHaveLength(13);
+  });
+
+  it('propose_update returns terminal with apply_update_ button', async () => {
+    const handler = getToolHandler('propose_update')!;
+    const r = await handler(
+      {
+        google_event_id: 'e1',
+        summary: 'Reunião João',
+        changes_human: 'horário para 15:00',
+        patch: { start: { dateTime: '2026-05-01T15:00:00-03:00' } },
+      },
+      { messages: [], draft: null, lastUsed: Date.now() },
+      { chatId: 'c' }
+    );
+    expect(r.terminal?.buttons?.[0]?.[0].callback_data).toMatch(/^apply_update_/);
+    expect(r.terminal?.text).toMatch(/Reunião João/);
+    expect(r.terminal?.text).toMatch(/horário para 15:00/);
+  });
+
+  it('propose_delete returns terminal with apply_delete_ button', async () => {
+    const handler = getToolHandler('propose_delete')!;
+    const r = await handler(
+      { google_event_id: 'e2', summary: 'Standup' },
+      { messages: [], draft: null, lastUsed: Date.now() },
+      { chatId: 'c' }
+    );
+    expect(r.terminal?.buttons?.[0]?.[0].callback_data).toMatch(/^apply_delete_/);
+    expect(r.terminal?.text).toMatch(/Standup/);
+    expect(r.terminal?.text).toMatch(/não pode ser desfeita/i);
+  });
+
+  it('list_upcoming_events returns events from calendar-ops', async () => {
+    // Mock calendar-ops at module level — if not already mocked, skip this test or mock inline
+    // Use jest.spyOn approach
+    const calendarOps = require('./calendar-ops');
+    const spy = jest.spyOn(calendarOps, 'listUpcomingEvents').mockResolvedValueOnce([
+      { id: 'e1', summary: 'Reunião', start: '2026-05-01T14:00:00Z', end: '2026-05-01T15:00:00Z' },
+    ]);
+    const handler = getToolHandler('list_upcoming_events')!;
+    const r = await handler({ days_ahead: 7 }, { messages: [], draft: null, lastUsed: Date.now() }, { chatId: 'c' });
+    expect(r.content).toHaveProperty('events');
+    expect((r.content as any).events).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('search_events returns events with found count', async () => {
+    const calendarOps = require('./calendar-ops');
+    const spy = jest.spyOn(calendarOps, 'searchEventsByQuery').mockResolvedValueOnce([
+      { id: 'e1', summary: 'Reunião João', start: '2026-05-01T14:00:00Z', end: '2026-05-01T15:00:00Z' },
+    ]);
+    const handler = getToolHandler('search_events')!;
+    const r = await handler({ query: 'João' }, { messages: [], draft: null, lastUsed: Date.now() }, { chatId: 'c' });
+    expect((r.content as any).found).toBe(1);
+    spy.mockRestore();
   });
 });

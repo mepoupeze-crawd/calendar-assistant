@@ -12,6 +12,9 @@ import type { ValidatedEvent, ParsedParticipant } from './types';
 import { lookupContactsByName } from './contacts';
 import { checkCalendarConflicts } from './conflict-detector';
 import { generatePreview } from './previewer';
+import { listUpcomingEvents, searchEventsByQuery } from './calendar-ops';
+import { pendingOpsStore } from './pending-ops-store';
+import { randomUUID } from 'crypto';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -216,6 +219,66 @@ export const TOOL_SCHEMAS: Array<{
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'list_upcoming_events',
+      description: 'Lista eventos futuros do calendário do usuário. Use para responder "quais meus próximos compromissos?" e para verificar disponibilidade antes de propor horário.',
+      parameters: {
+        type: 'object',
+        properties: {
+          days_ahead: { type: 'integer', default: 7, description: 'Quantos dias à frente buscar (default: 7)' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'search_events',
+      description: 'Busca eventos existentes por texto (título, local, participantes). Use SEMPRE antes de propose_update ou propose_delete para localizar o evento correto.',
+      parameters: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', description: 'Termo de busca (nome do evento, participante, etc)' },
+          days_ahead: { type: 'integer', default: 14 },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'propose_update',
+      description: 'Prepara atualização de evento EXISTENTE. NÃO executa — gera botão para o usuário confirmar. Requer chamar search_events antes para obter google_event_id.',
+      parameters: {
+        type: 'object',
+        required: ['google_event_id', 'summary', 'changes_human', 'patch'],
+        properties: {
+          google_event_id: { type: 'string' },
+          summary: { type: 'string', description: 'Nome do evento para exibir ao usuário' },
+          changes_human: { type: 'string', description: 'Descrição das mudanças em português (ex: "horário para 15:00, local Sala 101")' },
+          patch: { type: 'object', description: 'Patch parcial no formato da Google Calendar API (campos a atualizar)' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'propose_delete',
+      description: 'Prepara exclusão de evento EXISTENTE. NÃO executa — gera botão para o usuário confirmar. Requer chamar search_events antes. Ação irreversível.',
+      parameters: {
+        type: 'object',
+        required: ['google_event_id', 'summary'],
+        properties: {
+          google_event_id: { type: 'string' },
+          summary: { type: 'string', description: 'Nome do evento para exibir ao usuário na confirmação' },
+        },
+      },
+    },
+  },
 ];
 
 // ─── Stub handlers ────────────────────────────────────────────────────────────
@@ -375,3 +438,54 @@ registerHandler('clear_draft', async () => ({
   terminal: { text: '🆕 Sessão reiniciada. Pode enviar um novo evento.' },
   stateMutator: (s) => { s.draft = null; s.messages = []; },
 }));
+
+// ─── Phase-2 handlers ─────────────────────────────────────────────────────────
+
+registerHandler('list_upcoming_events', async (args) => {
+  const daysAhead = typeof (args as any).days_ahead === 'number' ? (args as any).days_ahead : 7;
+  const events = await listUpcomingEvents({ daysAhead });
+  return { content: { events } };
+});
+
+registerHandler('search_events', async (args) => {
+  const { query, days_ahead } = args as { query: string; days_ahead?: number };
+  const events = await searchEventsByQuery({ query, daysAhead: days_ahead ?? 14 });
+  return { content: { events, found: events.length } };
+});
+
+registerHandler('propose_update', async (args) => {
+  const { google_event_id, summary, changes_human, patch } = args as {
+    google_event_id: string;
+    summary: string;
+    changes_human: string;
+    patch: Record<string, unknown>;
+  };
+  const opId = randomUUID();
+  pendingOpsStore.set(opId, { type: 'update', google_event_id, patch, summary });
+  return {
+    content: { ok: true, op_id: opId },
+    terminal: {
+      text: `✏️ Vou atualizar <b>${summary}</b>:\n\n• ${changes_human}\n\nConfirma?`,
+      buttons: [[
+        { text: '✓ Aplicar mudança', callback_data: `apply_update_${opId}` },
+        { text: '✗ Cancelar',        callback_data: `abort_op_${opId}` },
+      ]],
+    },
+  };
+});
+
+registerHandler('propose_delete', async (args) => {
+  const { google_event_id, summary } = args as { google_event_id: string; summary: string };
+  const opId = randomUUID();
+  pendingOpsStore.set(opId, { type: 'delete', google_event_id, summary });
+  return {
+    content: { ok: true, op_id: opId },
+    terminal: {
+      text: `🗑 Tem certeza que quer excluir <b>${summary}</b>?\n\nEssa ação não pode ser desfeita.`,
+      buttons: [[
+        { text: '🗑 Confirmar exclusão', callback_data: `apply_delete_${opId}` },
+        { text: '✗ Cancelar',            callback_data: `abort_op_${opId}` },
+      ]],
+    },
+  };
+});
