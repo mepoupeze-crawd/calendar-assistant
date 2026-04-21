@@ -159,4 +159,19 @@ describe('ConversationStore', () => {
       expect(state.draft).toBeNull();
     });
   });
+
+  describe('6. setLastCreatedEventId', () => {
+    it('stores and retrieves lastCreatedEventId', () => {
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 20 });
+      store.setLastCreatedEventId('c', 'abc-123');
+      expect(store.get('c')?.lastCreatedEventId).toBe('abc-123');
+    });
+
+    it('clear removes lastCreatedEventId', () => {
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 20 });
+      store.setLastCreatedEventId('c', 'abc-123');
+      store.clear('c');
+      expect(store.get('c')).toBeNull();
+    });
+  });
 });

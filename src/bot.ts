@@ -300,6 +300,12 @@ async function handleUpdate(update: any): Promise<void> {
           await answerCallbackQuery(queryId, '✅ Criando evento...');
           const response = await handleConfirmation(chatIdStr, eventId, cached.validated_event);
           await sendMessage(response.chat_id, response.text);
+
+          // Save the real Google Calendar event ID so the agent can use it for edits
+          if (response.event_id) {
+            conversationStore.setLastCreatedEventId(chatIdStr, response.event_id);
+          }
+
           eventCache.delete(eventId);
           console.log(`[Bot] Cleared cache for ${eventId}`);
         } catch (error) {

@@ -116,8 +116,9 @@ export async function handleConfirmation(
 
     return {
       chat_id,
-      text: `✅ Evento criado!\n\n📅 ${event.title}\n🔗 ${result.event_link}\n\nEvent ID: ${result.google_event_id}`,
+      text: `✅ Evento criado!\n\n📅 ${event.title}\n🔗 ${result.event_link}`,
       action: 'send',
+      event_id: result.google_event_id,
     };
   } catch (error) {
     const err = error instanceof Error ? error.message : 'Unknown error';

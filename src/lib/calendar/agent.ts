@@ -89,7 +89,8 @@ export async function runAgentTurn(chatId: string, userText: string): Promise<Ag
     // Draft context injection — rebuilt each iteration to reflect mutations from previous iteration
     const draftContextMsg: AgentMessage = {
       role: 'system' as const,
-      content: `DRAFT ATUAL: ${state.draft ? JSON.stringify(state.draft) : '(vazio)'}`,
+      content: `DRAFT ATUAL: ${state.draft ? JSON.stringify(state.draft) : '(vazio)'}
+ULTIMO_EVENTO_CRIADO_ID: ${state.lastCreatedEventId ?? '(nenhum)'}`,
     };
     const messages = [...state.messages, draftContextMsg];
 

@@ -26,6 +26,7 @@ export interface AgentMessage {
 export interface ConversationState {
   messages: AgentMessage[];
   draft: ValidatedEvent | null;
+  lastCreatedEventId?: string;
   lastUsed: number;
 }
 
@@ -108,6 +109,16 @@ export class ConversationStore {
   setDraft(chatId: string, draft: ValidatedEvent | null): void {
     const state = this.getOrCreate(chatId);
     state.draft = draft;
+    state.lastUsed = Date.now();
+  }
+
+  /**
+   * Stores the Google Calendar event ID of the most recently created event for `chatId`.
+   * Allows the agent to reference the real event ID when the user requests edits.
+   */
+  setLastCreatedEventId(chatId: string, eventId: string): void {
+    const state = this.getOrCreate(chatId);
+    state.lastCreatedEventId = eventId;
     state.lastUsed = Date.now();
   }
 
