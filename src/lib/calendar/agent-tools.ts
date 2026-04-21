@@ -3,8 +3,8 @@
  *
  * TOOL_SCHEMAS defines the 9 tools the agent can call.
  * The handler registry maps tool names to async handler functions.
- * Stub handlers for reply_text and ask_user are registered here;
- * the remaining handlers are registered in Task 3.
+ * All handlers (reply_text, ask_user, and the calendar-specific tools) are
+ * registered here.
  */
 
 import type { ConversationState } from './conversation-store';
@@ -261,7 +261,7 @@ registerHandler('propose_event', async (args) => {
     start_date: String(args.start_date ?? ''),
     start_time: args.start_time != null ? String(args.start_time) : null,
     end_time: args.end_time != null ? String(args.end_time) : null,
-    duration_minutes: null,
+    duration_minutes: typeof (args as any).duration_minutes === 'number' ? (args as any).duration_minutes : null,
     all_day: typeof args.all_day === 'boolean' ? args.all_day : false,
     participants,
     description: args.description != null ? String(args.description) : null,
@@ -269,7 +269,7 @@ registerHandler('propose_event', async (args) => {
   };
 
   return {
-    content: { ok: true, draft },
+    content: { ok: true, draft: { ...draft, participants: [...draft.participants] } },
     stateMutator: (s) => { s.draft = draft; },
   };
 });
@@ -303,9 +303,21 @@ registerHandler('remove_participant', async (args) => {
   };
 });
 
-registerHandler('set_participant_email', async (args) => {
+registerHandler('set_participant_email', async (args, state) => {
   const name = String(args.name ?? '');
   const email = String(args.email ?? '');
+
+  if (state.draft === null) {
+    return { content: { ok: false, reason: 'no_draft' } };
+  }
+
+  const exists = state.draft.participants.some(
+    (p) => p.name.toLowerCase() === name.toLowerCase()
+  );
+  if (!exists) {
+    return { content: { ok: false, reason: 'participant_not_found', name } };
+  }
+
   return {
     content: { ok: true, name, email },
     stateMutator: (s) => {
@@ -355,7 +367,6 @@ registerHandler('show_preview', async (_args, state) => {
         ],
       ],
     },
-    stateMutator: (s) => { (s as any).lastPreviewEventId = preview.event_id; },
   };
 });
 
