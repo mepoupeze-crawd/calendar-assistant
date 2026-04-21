@@ -9,7 +9,7 @@
 
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
-import { handleTelegramInput, handleConfirmation, handleCancellation, resolveParticipantsAndPreview, setParticipantEmail } from './handlers/telegram-calendar';
+import { handleConfirmation, handleCancellation } from './handlers/telegram-calendar';
 import type { TelegramMessage, TelegramResponse } from './handlers/telegram-calendar';
 import type { ValidatedEvent } from './lib/calendar/types';
 import { PersistentEventCache } from './lib/calendar/event-cache';
@@ -20,8 +20,8 @@ dotenv.config();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
 const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID || '7131103597'; // Default: João Calice (PersonalAssistant)
-const USE_AGENT = process.env.USE_AGENT === 'true';
-if (USE_AGENT) console.log('[Bot] Agent mode enabled (USE_AGENT=true)');
+const USE_AGENT = process.env.USE_AGENT !== 'false'; // default true; set USE_AGENT=false to revert
+if (USE_AGENT) console.log('[Bot] Agent mode enabled (USE_AGENT default=true)');
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN not set');
@@ -33,162 +33,13 @@ console.log(`[Bot] Configured to respond only in chat: ${ALLOWED_CHAT_ID}`);
 let lastUpdateId = 0;
 const eventCache = new PersistentEventCache(); // persiste em data/event-cache.json
 
-// ─── Conversation Session (Fix #3) ────────────────────────────────────────────
-// Tracks accumulated user messages per chat for multi-turn clarification.
-// When the bot asks for more info, subsequent answers are combined with the
-// original text so the LLM always has full context.
-
-interface ChatSession {
-  texts: string[];
-  createdAt: number;
-  timerId: NodeJS.Timeout;
-}
-const chatSessions = new Map<string, ChatSession>();
-const SESSION_TTL_MS = 5 * 60 * 1000; // sessions expire after 5 min of inactivity
-const CONTACT_EMAIL_TTL_MS = 10 * 60 * 1000; // 10 minutos para informar email
-
-/** Returns the combined context string for a chat, or null if no active session. */
-function getSessionContext(chatId: string): string | null {
-  const session = chatSessions.get(chatId);
-  if (!session) return null;
-  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-    clearTimeout(session.timerId);
-    chatSessions.delete(chatId);
-    return null;
-  }
-  return session.texts.join('. ');
-}
-
-/** Appends a new user message to the clarification session. */
-function appendToSession(chatId: string, text: string): void {
-  const existing = chatSessions.get(chatId);
-  if (existing && Date.now() - existing.createdAt <= SESSION_TTL_MS) {
-    existing.texts.push(text);
-    return;
-  }
-  // Cancelar timer anterior se existir
-  if (existing) clearTimeout(existing.timerId);
-
-  const timerId = setTimeout(async () => {
-    chatSessions.delete(chatId);
-    await sendMessage(chatId, '⏰ Sessão expirou. Envie o evento completo novamente.');
-  }, SESSION_TTL_MS);
-
-  chatSessions.set(chatId, { texts: [text], createdAt: Date.now(), timerId });
-}
-
-/** Clears all pending state (session + edit + contact resolution) for a chat. */
-function clearChatState(chatId: string): void {
-  const session = chatSessions.get(chatId);
-  if (session) clearTimeout(session.timerId);
-  chatSessions.delete(chatId);
-  pendingEdits.delete(chatId);
-  pendingContactPicks.delete(chatId);
-  const pendingEmail = pendingContactEmails.get(chatId);
-  if (pendingEmail) clearTimeout(pendingEmail.timerId);
-  pendingContactEmails.delete(chatId);
-}
-
-function setPendingContactEmail(chatIdStr: string, chatId: any, name: string, partialEvent: ValidatedEvent): void {
-  const existing = pendingContactEmails.get(chatIdStr);
-  if (existing) clearTimeout(existing.timerId);
-
-  const timerId = setTimeout(async () => {
-    const pending = pendingContactEmails.get(chatIdStr);
-    if (!pending) return;
-    pendingContactEmails.delete(chatIdStr);
-    const eventWithout = {
-      ...pending.partialEvent,
-      participants: pending.partialEvent.participants.filter(p => p.name !== pending.name),
-    };
-    await sendMessage(chatIdStr, `⏰ Tempo esgotado — <b>${pending.name}</b> não foi adicionado. Criando evento sem ele.`);
-    const resp = await resolveParticipantsAndPreview(chatIdStr, eventWithout);
-    await dispatchContactResponse(chatIdStr, chatId, resp);
-  }, CONTACT_EMAIL_TTL_MS);
-
-  pendingContactEmails.set(chatIdStr, { name, partialEvent, timerId });
-  chatSessions.delete(chatIdStr);
-  console.log(`[Bot] Waiting for email for "${name}" (timeout: 10min)`);
-}
-
-/**
- * Send a contact-resolution response and update the relevant state maps.
- * Used after resolveParticipantsAndPreview() in both text and callback paths.
- */
-async function dispatchContactResponse(
-  chatIdStr: string,
-  chatId: any,
-  response: TelegramResponse
-): Promise<void> {
-  await sendMessage(response.chat_id, response.text, response.buttons);
-
-  if (response.event_id && response.validated_event && response.buttons) {
-    clearChatState(chatIdStr);
-    eventCache.set(response.event_id, {
-      message: {},
-      validated_event: response.validated_event,
-      timestamp: Date.now(),
-    });
-    console.log(`[Bot] Cached event ${response.event_id} for chat ${chatId}`);
-  } else if (response.contactChoice && response.validated_event) {
-    pendingContactPicks.set(chatIdStr, {
-      name: response.contactChoice.participantName,
-      options: response.contactChoice.options,
-      partialEvent: response.validated_event,
-    });
-    chatSessions.delete(chatIdStr);
-    console.log(`[Bot] Contact pick pending: "${response.contactChoice.participantName}" (${response.contactChoice.options.length} options)`);
-  } else if (response.missingEmailFor && response.validated_event) {
-    setPendingContactEmail(chatIdStr, chatId, response.missingEmailFor, response.validated_event);
-  }
-}
-
-// ─── Edit Mode (Fix #2) ───────────────────────────────────────────────────────
-// Stores the text representation of the event being edited per chat.
-// When the user replies with changes, we combine this base with their request.
-
-const pendingEdits = new Map<string, string>(); // chat_id → event base text
-
-// ─── Contact Resolution State ─────────────────────────────────────────────────
-// Tracks per-chat contact-resolution flows so the normal message pipeline
-// is not involved when the user is picking a contact or typing an email.
-
-interface PendingContactPick {
-  name: string;                                      // participant name being resolved
-  options: Array<{ name: string; email: string }>;   // contacts found
-  partialEvent: ValidatedEvent;                      // event with this participant unresolved
-}
-const pendingContactPicks = new Map<string, PendingContactPick>();   // chat_id → pick
-
-interface PendingContactEmail {
-  name: string;
-  partialEvent: ValidatedEvent;
-  timerId: NodeJS.Timeout;
-}
-const pendingContactEmails = new Map<string, PendingContactEmail>(); // chat_id → email
-
 // ─── Processing Mutex ─────────────────────────────────────────────────────────
 // Prevents race conditions when user sends messages in rapid succession.
 const isProcessing = new Set<string>();
 
-/** Converts a ValidatedEvent back to a natural-language string for the LLM. */
-function eventToText(event: ValidatedEvent): string {
-  const parts: string[] = [event.title, event.start_date];
-  if (event.all_day) {
-    parts.push('o dia todo');
-  } else {
-    if (event.start_time) parts.push(`às ${event.start_time}`);
-    if (event.end_time) parts.push(`até ${event.end_time}`);
-  }
-  if (event.location) parts.push(`em ${event.location}`);
-  if (event.participants?.length) {
-    const names = event.participants
-      .map(p => p.name)
-      .filter(n => n?.trim())
-      .join(' e ');
-    if (names) parts.push(`com ${names}`);
-  }
-  return parts.join(' ');
+/** Clears all pending state for a chat. All state is now in conversationStore. */
+function clearChatState(chatId: string): void {
+  // All state is now in conversationStore; cleared separately via conversationStore.clear()
 }
 
 // ─── Telegram API Helpers ─────────────────────────────────────────────────────
@@ -403,117 +254,26 @@ async function handleUpdate(update: any): Promise<void> {
 
       console.log(`[Bot] Message from ${chatId}: "${rawText.substring(0, 60)}"`);
 
-      // ── Agent mode (USE_AGENT=true) ──────────────────────────────────────
-      if (USE_AGENT) {
-        try {
-          const response = await runAgentTurn(chatIdStr, rawText);
-          await sendMessage(chatIdStr, response.text, response.buttons);
+      // ── Agent mode ───────────────────────────────────────────────────────
+      try {
+        const response = await runAgentTurn(chatIdStr, rawText);
+        await sendMessage(chatIdStr, response.text, response.buttons);
 
-          // Cache event for confirm button if preview was shown
-          if (response.buttons?.some(row => row.some(b => b.callback_data?.startsWith('confirm_')))) {
-            const state = conversationStore.get(chatIdStr);
-            const evt = state?.draft;
-            const btnRow = response.buttons.flat().find(b => b.callback_data?.startsWith('confirm_'));
-            const eventId = btnRow?.callback_data.replace('confirm_', '');
-            if (evt && eventId) {
-              eventCache.set(eventId, { message: {}, validated_event: evt, timestamp: Date.now() });
-              console.log(`[Bot/Agent] Cached event ${eventId} for chat ${chatId}`);
-            }
+        // Cache event for confirm button if preview was shown
+        if (response.buttons?.some(row => row.some(b => b.callback_data?.startsWith('confirm_')))) {
+          const state = conversationStore.get(chatIdStr);
+          const evt = state?.draft;
+          const btnRow = response.buttons.flat().find(b => b.callback_data?.startsWith('confirm_'));
+          const eventId = btnRow?.callback_data.replace('confirm_', '');
+          if (evt && eventId) {
+            eventCache.set(eventId, { message: {}, validated_event: evt, timestamp: Date.now() });
+            console.log(`[Bot/Agent] Cached event ${eventId} for chat ${chatId}`);
           }
-        } catch (err) {
-          console.error('[Bot/Agent] error', err);
-          await sendMessage(chatIdStr, '❌ Erro no agente. Tente /new e envie de novo.');
         }
-        return; // skip legacy flow
+      } catch (err) {
+        console.error('[Bot/Agent] error', err);
+        await sendMessage(chatIdStr, '❌ Erro no agente. Tente /new e envie de novo.');
       }
-
-      // ── Pending email input (user typing an email after "Qual o email?") ──
-      const pendingEmail = pendingContactEmails.get(chatIdStr);
-      if (pendingEmail) {
-        const email = rawText.trim();
-        if (!email.includes('@')) {
-          await sendMessage(chatIdStr, `❌ "${email}" não parece um email válido.\nQual o email de <b>${pendingEmail.name}</b>?`);
-          return; // keep pendingContactEmails set
-        }
-        clearTimeout(pendingEmail.timerId);
-        pendingContactEmails.delete(chatIdStr);
-        const updated = setParticipantEmail(pendingEmail.partialEvent, pendingEmail.name, email);
-        await dispatchContactResponse(chatIdStr, chatId, await resolveParticipantsAndPreview(chatIdStr, updated));
-        return;
-      }
-
-      // ── Pending contact pick via text (user types "1", "2", etc.) ─────────
-      const pendingPick = pendingContactPicks.get(chatIdStr);
-      if (pendingPick) {
-        const num = parseInt(rawText.trim(), 10);
-        if (!isNaN(num) && num >= 1 && num <= pendingPick.options.length) {
-          pendingContactPicks.delete(chatIdStr);
-          const selected = pendingPick.options[num - 1];
-          const updated = setParticipantEmail(pendingPick.partialEvent, pendingPick.name, selected.email);
-          await dispatchContactResponse(chatIdStr, chatId, await resolveParticipantsAndPreview(chatIdStr, updated));
-          return;
-        }
-        // Not a valid number — clear pick and fall through to normal processing
-        pendingContactPicks.delete(chatIdStr);
-      }
-
-      // ── Step 2: Merge session / edit context before parsing ──────────────
-      let inputText = rawText;
-
-      const pendingEdit = pendingEdits.get(chatIdStr);
-      if (pendingEdit) {
-        inputText = `${pendingEdit}. Altere: ${rawText}`;
-        pendingEdits.delete(chatIdStr);
-        console.log(`[Bot] Edit mode — combined input: "${inputText.substring(0, 80)}"`);
-      } else {
-        const sessionCtx = getSessionContext(chatIdStr);
-        if (sessionCtx) {
-          inputText = `${sessionCtx}. ${rawText}`;
-          console.log(`[Bot] Session context merged: "${inputText.substring(0, 80)}"`);
-        }
-      }
-
-      const telegramMsg: TelegramMessage = {
-        chat_id: chatIdStr,
-        user_id: String(update.message.from.id),
-        text: inputText,
-        message_id: String(update.message.message_id),
-      };
-
-      const response = await handleTelegramInput(telegramMsg);
-
-      // F2: Add session TTL hint to clarification messages
-      const responseText = response.needsClarification
-        ? `${response.text}\n\n⏳ Você tem ${Math.round(SESSION_TTL_MS / 60000)} minutos para responder.`
-        : response.text;
-      await sendMessage(response.chat_id, responseText, response.buttons);
-
-      if (response.event_id && response.validated_event && response.buttons) {
-        // Valid preview — clear pending state, cache the event
-        clearChatState(chatIdStr);
-        eventCache.set(response.event_id, {
-          message: { ...telegramMsg, text: rawText },
-          validated_event: response.validated_event,
-          timestamp: Date.now(),
-        });
-        console.log(`[Bot] Cached event ${response.event_id} for chat ${chatId}`);
-      } else if (response.contactChoice && response.validated_event) {
-        // Multiple contacts found — waiting for user to pick one
-        pendingContactPicks.set(chatIdStr, {
-          name: response.contactChoice.participantName,
-          options: response.contactChoice.options,
-          partialEvent: response.validated_event,
-        });
-        chatSessions.delete(chatIdStr);
-        console.log(`[Bot] Contact pick pending: "${response.contactChoice.participantName}" (${response.contactChoice.options.length} options)`);
-      } else if (response.missingEmailFor && response.validated_event) {
-        setPendingContactEmail(chatIdStr, chatId, response.missingEmailFor, response.validated_event);
-      } else if (response.needsClarification) {
-        // Regular ambiguous input — accumulate in session
-        appendToSession(chatIdStr, rawText);
-        console.log(`[Bot] Clarification needed — session now has ${chatSessions.get(chatIdStr)?.texts.length} messages`);
-      }
-      // NOTE: on parse error we intentionally keep session alive.
       } finally {
         isProcessing.delete(chatIdStr);
       }
@@ -556,93 +316,12 @@ async function handleUpdate(update: any): Promise<void> {
         eventCache.delete(eventId);
         clearChatState(chatIdStr);
 
-      } else if (callbackData.startsWith('pick_contact_')) {
-        // ── Contact pick button ─────────────────────────────────────────────
-        const suffix = callbackData.replace('pick_contact_', '');
-        const pending = pendingContactPicks.get(chatIdStr);
-
-        if (!pending) {
-          await answerCallbackQuery(queryId, '⏰ Expirou. Envie o evento novamente.');
-          await sendMessage(chatIdStr, '⏰ Escolha expirou. Por favor envie o evento novamente.');
-          return;
-        }
-
-        if (suffix === 'manual') {
-          await answerCallbackQuery(queryId, '✍️ Ok');
-          pendingContactPicks.delete(chatIdStr);
-          setPendingContactEmail(chatIdStr, chatId, pending.name, pending.partialEvent);
-          await sendMessage(chatIdStr, `✍️ Qual o email de <b>${pending.name}</b>?\n\n<i>Ou clique em ⏭ Pular para criar o evento sem este participante.</i>`, [[{ text: `⏭ Pular ${pending.name}`, callback_data: 'skip_contact_email' }]]);
-          return;
-        }
-
-        const index = parseInt(suffix, 10);
-        const selected = pending.options[index];
-        if (!selected) {
-          await answerCallbackQuery(queryId, '❌ Opção inválida');
-          return;
-        }
-
-        await answerCallbackQuery(queryId, `✅ ${selected.name}`);
-        pendingContactPicks.delete(chatIdStr);
-        const updated = setParticipantEmail(pending.partialEvent, pending.name, selected.email);
-        await dispatchContactResponse(chatIdStr, chatId, await resolveParticipantsAndPreview(chatIdStr, updated));
-
-      } else if (callbackData === 'skip_contact_email') {
-        const pending = pendingContactEmails.get(chatIdStr);
-        if (!pending) {
-          await answerCallbackQuery(queryId, '⏰ Expirou. Envie o evento novamente.');
-          await sendMessage(chatIdStr, '⏰ Escolha expirou. Por favor envie o evento novamente.');
-          return;
-        }
-        clearTimeout(pending.timerId);
-        pendingContactEmails.delete(chatIdStr);
-        await answerCallbackQuery(queryId, `⏭ ${pending.name} pulado`);
-        const eventWithout = {
-          ...pending.partialEvent,
-          participants: pending.partialEvent.participants.filter(p => p.name !== pending.name),
-        };
-        await sendMessage(chatIdStr, `⏭ <b>${pending.name}</b> não foi adicionado ao evento.`);
-        const resp = await resolveParticipantsAndPreview(chatIdStr, eventWithout);
-        await dispatchContactResponse(chatIdStr, chatId, resp);
-
       } else if (callbackData.startsWith('edit_')) {
-        // ── Edit button (Fix #2) ────────────────────────────────────────────
-        const eventId = callbackData.replace('edit_', '');
-
-        if (USE_AGENT) {
-          // In agent mode: tell the agent the user wants to edit
-          await answerCallbackQuery(queryId, '✏️ O que quer mudar?');
-          const response = await runAgentTurn(chatIdStr, `O usuário quer editar o evento. Pergunte o que ele quer mudar.`);
-          await sendMessage(chatIdStr, response.text, response.buttons);
-          return;
-        }
-
-        // Legacy edit flow:
-        const cached = eventCache.get(eventId);
-
-        if (!cached?.validated_event) {
-          await answerCallbackQuery(queryId, '⏰ Preview expirou');
-          await sendMessage(chatIdStr, '⏰ Preview expirou. Envie o evento novamente.');
-          return;
-        }
-
+        // ── Edit button ─────────────────────────────────────────────────────
+        // In agent mode: tell the agent the user wants to edit
         await answerCallbackQuery(queryId, '✏️ O que quer mudar?');
-
-        const evt: ValidatedEvent = cached.validated_event;
-        const baseText = eventToText(evt);
-        pendingEdits.set(chatIdStr, baseText);
-        chatSessions.delete(chatIdStr); // clear any open clarification session
-
-        const summary = [
-          `📅 <b>${evt.title}</b>`,
-          `📆 ${evt.start_date}${evt.start_time ? ` às ${evt.start_time}` : ''}${evt.end_time ? `–${evt.end_time}` : ''}`,
-          evt.location ? `📍 ${evt.location}` : '',
-        ].filter(Boolean).join('\n');
-
-        await sendMessage(
-          chatIdStr,
-          `✏️ Editando evento:\n\n${summary}\n\nO que você quer mudar?\n<i>Ex: "muda horário para 16:00", "adiciona sala 101", "com Maria também"</i>`
-        );
+        const response = await runAgentTurn(chatIdStr, `O usuário quer editar o evento. Pergunte o que ele quer mudar.`);
+        await sendMessage(chatIdStr, response.text, response.buttons);
 
       } else if (callbackData === 'agent_escape_cancel_flow') {
         await answerCallbackQuery(queryId, '❌ Fluxo cancelado');
