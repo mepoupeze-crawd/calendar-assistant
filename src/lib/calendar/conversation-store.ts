@@ -27,6 +27,7 @@ export interface ConversationState {
   messages: AgentMessage[];
   draft: ValidatedEvent | null;
   lastCreatedEventId?: string;
+  imageLink?: string;          // ← add this line
   lastUsed: number;
 }
 
@@ -120,6 +121,12 @@ export class ConversationStore {
   setLastCreatedEventId(chatId: string, eventId: string | undefined): void {
     const state = this.getOrCreate(chatId);
     state.lastCreatedEventId = eventId;
+    state.lastUsed = Date.now();
+  }
+
+  setImageLink(chatId: string, imageLink: string | undefined): void {
+    const state = this.getOrCreate(chatId);
+    state.imageLink = imageLink;
     state.lastUsed = Date.now();
   }
 

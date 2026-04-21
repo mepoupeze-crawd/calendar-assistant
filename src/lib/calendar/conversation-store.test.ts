@@ -182,3 +182,27 @@ describe('ConversationStore', () => {
     });
   });
 });
+
+describe('setImageLink', () => {
+  it('armazena imageLink no state', () => {
+    const store = new ConversationStore({ ttlMs: 60000, maxMessages: 20 });
+    store.setImageLink('chat-1', 'https://drive.google.com/file/d/abc/view');
+    const state = store.get('chat-1');
+    expect(state?.imageLink).toBe('https://drive.google.com/file/d/abc/view');
+  });
+
+  it('aceita undefined para limpar o link', () => {
+    const store = new ConversationStore({ ttlMs: 60000, maxMessages: 20 });
+    store.setImageLink('chat-1', 'https://drive.google.com/file/d/abc/view');
+    store.setImageLink('chat-1', undefined);
+    const state = store.get('chat-1');
+    expect(state?.imageLink).toBeUndefined();
+  });
+
+  it('clear() remove o imageLink junto com o resto do state', () => {
+    const store = new ConversationStore({ ttlMs: 60000, maxMessages: 20 });
+    store.setImageLink('chat-1', 'https://drive.google.com/file/d/abc/view');
+    store.clear('chat-1');
+    expect(store.get('chat-1')).toBeNull();
+  });
+});
