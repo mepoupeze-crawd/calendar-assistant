@@ -13,3 +13,4 @@ export * from "./conflict-detector";
 export * from "./undo-store";
 export * from './conversation-store';
 export * from './agent-tools';
+export * from './agent';

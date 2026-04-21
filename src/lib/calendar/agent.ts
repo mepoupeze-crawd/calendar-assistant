@@ -9,7 +9,7 @@
 
 import OpenAI from 'openai';
 import { ConversationStore, type AgentMessage } from './conversation-store';
-import { TOOL_SCHEMAS, getToolHandler, type ButtonRow } from './agent-tools';
+import { TOOL_SCHEMAS, getToolHandler, type ButtonRow, type ToolResult } from './agent-tools';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -66,13 +66,12 @@ export async function runAgentTurn(chatId: string, userText: string): Promise<Ag
   const userMsg: AgentMessage = { role: 'user', content: userText };
   conversationStore.appendMessage(chatId, userMsg);
 
-  // Draft context injection — always the current draft as a system message
-  const draftContextMsg: AgentMessage = {
-    role: 'system',
-    content: 'DRAFT ATUAL: ' + (state.draft ? JSON.stringify(state.draft) : '(vazio)'),
-  };
-
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+    // Draft context injection — rebuilt each iteration to reflect mutations from previous iteration
+    const draftContextMsg: AgentMessage = {
+      role: 'system' as const,
+      content: `DRAFT ATUAL: ${state.draft ? JSON.stringify(state.draft) : '(vazio)'}`,
+    };
     const messages = [...state.messages, draftContextMsg];
 
     // Call OpenAI
@@ -114,19 +113,26 @@ export async function runAgentTurn(chatId: string, userText: string): Promise<Ag
     // Execute each tool call
     for (const toolCall of message.tool_calls) {
       const toolName = toolCall.function.name;
-      const toolArgs = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
       const handler = getToolHandler(toolName);
 
-      let toolResult;
-      if (handler) {
-        toolResult = await handler(toolArgs, state, { chatId });
+      let toolResult: ToolResult;
+      try {
+        const toolArgs = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) as Record<string, unknown> : {};
+        toolResult = handler ? await handler(toolArgs, state, { chatId }) : { content: { error: 'unknown_tool', tool: toolName } };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        conversationStore.appendMessage(chatId, {
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: toolName,
+          content: JSON.stringify({ error: errMsg }),
+        });
+        continue; // skip to next tool call
+      }
 
-        // Apply state mutations if provided
-        if (toolResult.stateMutator) {
-          toolResult.stateMutator(state);
-        }
-      } else {
-        toolResult = { content: { error: 'unknown_tool', tool: toolName } };
+      // Apply state mutations if provided
+      if (toolResult.stateMutator) {
+        toolResult.stateMutator(state);
       }
 
       // Append tool result to history
