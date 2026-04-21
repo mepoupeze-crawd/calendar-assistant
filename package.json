@@ -15,7 +15,8 @@
   "dependencies": {
     "dotenv": "^16.0.3",
     "googleapis": "^171.4.0",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "openai": "^6.34.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
