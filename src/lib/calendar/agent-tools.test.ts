@@ -5,6 +5,25 @@
 
 import { TOOL_SCHEMAS, getToolHandler, registerHandler } from './agent-tools';
 import type { ConversationState } from './conversation-store';
+import type { ValidatedEvent } from './types';
+
+function makeState(): ConversationState {
+  return { messages: [], draft: null, lastUsed: Date.now() };
+}
+
+function makeDraft(): ValidatedEvent {
+  return {
+    title: 't',
+    start_date: '2026-05-01',
+    start_time: '10:00',
+    end_time: null,
+    duration_minutes: null,
+    all_day: false,
+    participants: [],
+    description: null,
+    location: null,
+  };
+}
 
 const EXPECTED_TOOL_NAMES = [
   'propose_event',
@@ -17,12 +36,6 @@ const EXPECTED_TOOL_NAMES = [
   'reply_text',
   'ask_user',
 ];
-
-const makeState = (): ConversationState => ({
-  messages: [],
-  draft: null,
-  lastUsed: Date.now(),
-});
 
 describe('agent-tools', () => {
   describe('1. TOOL_SCHEMAS contains exactly the 9 expected tool names', () => {
@@ -53,8 +66,8 @@ describe('agent-tools', () => {
       expect(getToolHandler('ask_user')).toBeInstanceOf(Function);
     });
 
-    it('other tools do not have handlers yet (Task 3 adds them)', () => {
-      const toolsWithoutHandlers = [
+    it('Task 3 tools now have handlers registered', () => {
+      const toolsWithHandlers = [
         'propose_event',
         'add_participant',
         'remove_participant',
@@ -63,8 +76,8 @@ describe('agent-tools', () => {
         'show_preview',
         'clear_draft',
       ];
-      for (const name of toolsWithoutHandlers) {
-        expect(getToolHandler(name)).toBeUndefined();
+      for (const name of toolsWithHandlers) {
+        expect(getToolHandler(name)).toBeInstanceOf(Function);
       }
     });
   });
@@ -135,5 +148,69 @@ describe('agent-tools', () => {
         { text: 'Skip', callback_data: 'agent_escape_skip_participant' },
       ]);
     });
+  });
+});
+
+describe('tool: propose_event', () => {
+  it('creates draft from args', async () => {
+    const state = makeState();
+    const handler = getToolHandler('propose_event')!;
+    const result = await handler(
+      { title: 'Reunião', start_date: '2026-05-01', start_time: '14:30', participants: [{ name: 'João', email: null }] },
+      state,
+      { chatId: 'c' }
+    );
+    result.stateMutator?.(state);
+    expect(state.draft).not.toBeNull();
+    expect(state.draft!.title).toBe('Reunião');
+    expect(state.draft!.participants).toHaveLength(1);
+    expect(state.draft!.participants[0].name).toBe('João');
+    expect(result.content).toHaveProperty('ok', true);
+  });
+});
+
+describe('tool: add_participant / remove_participant', () => {
+  it('adds participant to existing draft', async () => {
+    const state = makeState();
+    state.draft = makeDraft();
+    await (getToolHandler('add_participant')!({ name: 'Aline' }, state, { chatId: 'c' })).then(r => r.stateMutator?.(state));
+    expect(state.draft!.participants.map(p => p.name)).toContain('Aline');
+  });
+
+  it('does not duplicate participants (case-insensitive)', async () => {
+    const state = makeState();
+    state.draft = makeDraft();
+    state.draft.participants = [{ name: 'Aline', email: null, resolved: false }];
+    await (getToolHandler('add_participant')!({ name: 'aline' }, state, { chatId: 'c' })).then(r => r.stateMutator?.(state));
+    expect(state.draft!.participants).toHaveLength(1);
+  });
+
+  it('removes participant by name', async () => {
+    const state = makeState();
+    state.draft = makeDraft();
+    state.draft.participants = [{ name: 'Aline', email: null, resolved: false }];
+    await (getToolHandler('remove_participant')!({ name: 'Aline' }, state, { chatId: 'c' })).then(r => r.stateMutator?.(state));
+    expect(state.draft!.participants).toHaveLength(0);
+  });
+});
+
+describe('tool: clear_draft', () => {
+  it('clears draft and messages', async () => {
+    const state = makeState();
+    state.draft = makeDraft();
+    state.messages = [{ role: 'user', content: 'oi' }];
+    const r = await (getToolHandler('clear_draft')!)({}, state, { chatId: 'c' });
+    r.stateMutator?.(state);
+    expect(state.draft).toBeNull();
+    expect(state.messages).toHaveLength(0);
+    expect(r.terminal?.text).toMatch(/reiniciada/i);
+  });
+});
+
+describe('tool: show_preview (no draft)', () => {
+  it('returns error terminal when draft is null', async () => {
+    const state = makeState();
+    const r = await (getToolHandler('show_preview')!)({}, state, { chatId: 'c' });
+    expect(r.terminal?.text).toMatch(/sem evento/i);
   });
 });
