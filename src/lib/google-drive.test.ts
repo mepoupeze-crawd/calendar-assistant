@@ -55,6 +55,12 @@ describe('getOrCreateFolder', () => {
     expect(id2).toBe('cached-id');
     expect(mockFilesList).toHaveBeenCalledTimes(1);
   });
+
+  it('lança erro quando criação de pasta retorna sem id', async () => {
+    mockFilesList.mockResolvedValueOnce({ data: { files: [] } });
+    mockFilesCreate.mockResolvedValueOnce({ data: {} }); // no id
+    await expect(getOrCreateFolder('Calendário Bot')).rejects.toThrow('Drive folder creation: missing id');
+  });
 });
 
 describe('uploadImageToDrive', () => {

@@ -8,6 +8,7 @@ function driveClient(): drive_v3.Drive {
 
 let cachedFolderId: string | null = null;
 
+/** @internal */
 export function _resetFolderCacheForTesting(): void {
   cachedFolderId = null;
 }
@@ -16,8 +17,9 @@ export async function getOrCreateFolder(name: string): Promise<string> {
   if (cachedFolderId) return cachedFolderId;
 
   const drive = driveClient();
+  const safeName = name.replace(/'/g, "\\'");
   const res = await drive.files.list({
-    q: `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    q: `name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     fields: 'files(id)',
     spaces: 'drive',
   });
@@ -35,7 +37,7 @@ export async function getOrCreateFolder(name: string): Promise<string> {
     fields: 'id',
   });
 
-  if (!created.data.id) throw new Error('Drive folder creation: missing id in response');
+  if (!created.data.id) throw new Error('Drive folder creation: missing id');
   cachedFolderId = created.data.id;
   return cachedFolderId;
 }
