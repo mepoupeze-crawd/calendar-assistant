@@ -15,3 +15,4 @@ export * from './conversation-store';
 export * from './agent-tools';
 export * from './agent';
 export * from './calendar-ops';
+export * from './pending-ops-store';
