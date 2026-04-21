@@ -6,6 +6,16 @@
 // Mock openai BEFORE imports
 jest.mock('openai');
 
+// Mock calendar-ops to avoid real Google Calendar API calls
+jest.mock('./calendar-ops', () => ({
+  listUpcomingEvents: jest.fn().mockResolvedValue([]),
+  searchEventsByQuery: jest.fn().mockResolvedValue([
+    { id: 'e1', summary: 'Reunião com João', start: '2026-05-01T14:00:00Z', end: '2026-05-01T15:00:00Z' },
+  ]),
+  updateEvent: jest.fn().mockResolvedValue({ google_event_id: 'e1', event_link: 'https://cal.google.com/e1' }),
+  deleteEvent: jest.fn().mockResolvedValue(undefined),
+}));
+
 // Mock contacts to avoid real Google API calls
 jest.mock('./contacts', () => ({
   lookupContactsByName: jest.fn().mockResolvedValue({ contacts: [], error: false }),
@@ -239,5 +249,67 @@ describe('anti-regression: name inside quoted title is NOT extracted as particip
 
     // Response should be the reply_text content
     expect(response.text).toBe('Ok, removi Manuela. Quem você quer adicionar?');
+  });
+});
+
+describe('fase 2 — CRUD de eventos existentes', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
+      chat: { completions: { create: mockCreate } },
+    } as any));
+
+    conversationStore.clear('chat-fase2');
+  });
+
+  it('cancela evento: search_events → propose_delete → botão apply_delete_', async () => {
+    mockCreate
+      // First call: LLM calls search_events
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'search1',
+              type: 'function',
+              function: {
+                name: 'search_events',
+                arguments: JSON.stringify({ query: 'João', days_ahead: 14 }),
+              },
+            }],
+          },
+        }],
+      })
+      // Second call: LLM receives search results and calls propose_delete
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'del1',
+              type: 'function',
+              function: {
+                name: 'propose_delete',
+                arguments: JSON.stringify({
+                  google_event_id: 'e1',
+                  summary: 'Reunião com João',
+                }),
+              },
+            }],
+          },
+        }],
+      });
+
+    const response = await runAgentTurn('chat-fase2', 'cancela minha reunião com João');
+
+    // Should return terminal with apply_delete_ button
+    expect(response.buttons).toBeDefined();
+    expect(response.buttons!.flat().some(b => b.callback_data.startsWith('apply_delete_'))).toBe(true);
+    expect(response.text).toMatch(/Reunião com João/);
+    expect(response.text).toMatch(/excluir/i);
   });
 });
