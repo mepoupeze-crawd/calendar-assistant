@@ -11,3 +11,4 @@ export * from "./creator";
 export * from "./notifier";
 export * from "./conflict-detector";
 export * from "./undo-store";
+export * from './conversation-store';
