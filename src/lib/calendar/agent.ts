@@ -85,15 +85,30 @@ ADICIONAR PARTICIPANTE POR NOME:
 - NUNCA encerre o turno com participante adicionado e sem email resolvido.
 
 MEU EMAIL / ADICIONAR EU MESMO:
-- "meu email", "me adiciona", "inclua eu", "eu também" → use set_participant_email com email="${ownerEmail}" para o participante correspondente, ou add_participant("eu") + set_participant_email("eu", "${ownerEmail}") se ainda não estiver no draft. NÃO peça confirmação.`,
+- "meu email", "me adiciona", "inclua eu", "eu também" → use set_participant_email com email="${ownerEmail}" para o participante correspondente, ou add_participant("eu") + set_participant_email("eu", "${ownerEmail}") se ainda não estiver no draft. NÃO peça confirmação.
+
+IMAGEM FONTE:
+- Se o contexto incluir a chave de imagem de origem, coloque no campo description do propose_event:
+  "📸 Criado a partir de foto: [URL do link de imagem]"
+- Coloque o link no início do description, seguido de quebra de linha dupla e qualquer descrição adicional.
+- Não mencione a imagem de origem para o usuário — apenas inclua no description silenciosamente.`,
   };
 }
 
 // ─── Main agent loop ──────────────────────────────────────────────────────────
 
-export async function runAgentTurn(chatId: string, userText: string): Promise<AgentResponse> {
+export async function runAgentTurn(
+  chatId: string,
+  userText: string,
+  opts?: { imageLink?: string }
+): Promise<AgentResponse> {
   const openai = new OpenAI();
   const state = conversationStore.getOrCreate(chatId);
+
+  // Store imageLink only on the first turn where it's provided (photo turns)
+  if (opts?.imageLink) {
+    conversationStore.setImageLink(chatId, opts.imageLink);
+  }
 
   // Prepend system prompt on first turn
   if (state.messages.length === 0) {
@@ -106,10 +121,16 @@ export async function runAgentTurn(chatId: string, userText: string): Promise<Ag
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     // Draft context injection — rebuilt each iteration to reflect mutations from previous iteration
+    const contextLines = [
+      `DRAFT ATUAL: ${state.draft ? JSON.stringify(state.draft) : '(vazio)'}`,
+      `ULTIMO_EVENTO_CRIADO_ID: ${state.lastCreatedEventId ?? '(nenhum)'}`,
+    ];
+    if (state.imageLink) {
+      contextLines.push(`IMAGEM_FONTE: ${state.imageLink}`);
+    }
     const draftContextMsg: AgentMessage = {
       role: 'system' as const,
-      content: `DRAFT ATUAL: ${state.draft ? JSON.stringify(state.draft) : '(vazio)'}
-ULTIMO_EVENTO_CRIADO_ID: ${state.lastCreatedEventId ?? '(nenhum)'}`,
+      content: contextLines.join('\n'),
     };
     const messages = [...state.messages, draftContextMsg];
 

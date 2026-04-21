@@ -472,3 +472,52 @@ describe('contexto ULTIMO_EVENTO_CRIADO_ID', () => {
     expect(contextMsg?.content).toContain('ULTIMO_EVENTO_CRIADO_ID: cal_real123');
   });
 });
+
+describe('imageLink injection', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(
+      () => ({ chat: { completions: { create: mockCreate } } } as any)
+    );
+    // Clear store state to prevent bleed between test runs
+    conversationStore.clear('chat-img-inject');
+    conversationStore.clear('chat-no-img-inject');
+    conversationStore.clear('chat-clear-img');
+  });
+
+  it('injeta IMAGEM_FONTE no contexto quando opts.imageLink é fornecido', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: undefined } }],
+    });
+    await runAgentTurn('chat-img-inject', 'cria evento', { imageLink: 'https://drive.google.com/file/d/xyz/view' });
+    const callArgs = mockCreate.mock.calls[0][0];
+    const contextMsg = (callArgs.messages as Array<{ role: string; content: string }>)
+      .find(m => m.content?.includes('IMAGEM_FONTE'));
+    expect(contextMsg).toBeDefined();
+    expect(contextMsg!.content).toContain('https://drive.google.com/file/d/xyz/view');
+  });
+
+  it('não injeta IMAGEM_FONTE quando opts.imageLink está ausente', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: undefined } }],
+    });
+    await runAgentTurn('chat-no-img-inject', 'cria evento');
+    const callArgs = mockCreate.mock.calls[0][0];
+    const contextMsg = (callArgs.messages as Array<{ role: string; content: string }>)
+      .find(m => m.content?.includes('IMAGEM_FONTE'));
+    expect(contextMsg).toBeUndefined();
+  });
+
+  it('limpa imageLink do state quando clear_draft é chamado', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: null, tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'clear_draft', arguments: '{}' } },
+      ] } }],
+    });
+    await runAgentTurn('chat-clear-img', 'esquece', { imageLink: 'https://drive.google.com/file/d/xyz/view' });
+    const state = conversationStore.get('chat-clear-img');
+    expect(state?.imageLink).toBeUndefined();
+  });
+});

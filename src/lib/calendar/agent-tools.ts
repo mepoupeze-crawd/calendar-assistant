@@ -436,7 +436,11 @@ registerHandler('show_preview', async (_args, state) => {
 registerHandler('clear_draft', async () => ({
   content: { ok: true },
   terminal: { text: '🆕 Sessão reiniciada. Pode enviar um novo evento.' },
-  stateMutator: (s) => { s.draft = null; s.messages = []; },
+  stateMutator: (s) => {
+    s.draft = null;
+    s.messages = [];
+    s.imageLink = undefined;
+  },
 }));
 
 // ─── Phase-2 handlers ─────────────────────────────────────────────────────────
