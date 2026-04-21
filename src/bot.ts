@@ -14,6 +14,8 @@ import type { TelegramMessage, TelegramResponse } from './handlers/telegram-cale
 import type { ValidatedEvent } from './lib/calendar/types';
 import { PersistentEventCache } from './lib/calendar/event-cache';
 import { runAgentTurn, conversationStore } from './lib/calendar/agent';
+import { updateEvent, deleteEvent } from './lib/calendar/calendar-ops';
+import { pendingOpsStore } from './lib/calendar/pending-ops-store';
 
 dotenv.config();
 
@@ -352,6 +354,52 @@ async function handleUpdate(update: any): Promise<void> {
         } finally {
           isProcessing.delete(chatIdStr);
         }
+
+      } else if (callbackData.startsWith('apply_update_')) {
+        const opId = callbackData.replace('apply_update_', '');
+        const op = pendingOpsStore.get(opId);
+
+        if (!op || op.type !== 'update') {
+          await answerCallbackQuery(queryId, '⏰ Operação expirou');
+          await sendMessage(chatIdStr, '⏰ Operação expirou. Peça novamente.');
+          return;
+        }
+
+        await answerCallbackQuery(queryId, '✏️ Atualizando...');
+        try {
+          const { event_link } = await updateEvent(op.google_event_id, op.patch as any);
+          pendingOpsStore.delete(opId);
+          await sendMessage(chatIdStr, `✅ Atualizado: <b>${op.summary}</b>\n🔗 ${event_link}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await sendMessage(chatIdStr, `❌ Erro ao atualizar: ${msg}`);
+        }
+
+      } else if (callbackData.startsWith('apply_delete_')) {
+        const opId = callbackData.replace('apply_delete_', '');
+        const op = pendingOpsStore.get(opId);
+
+        if (!op || op.type !== 'delete') {
+          await answerCallbackQuery(queryId, '⏰ Operação expirou');
+          await sendMessage(chatIdStr, '⏰ Operação expirou. Peça novamente.');
+          return;
+        }
+
+        await answerCallbackQuery(queryId, '🗑 Excluindo...');
+        try {
+          await deleteEvent(op.google_event_id);
+          pendingOpsStore.delete(opId);
+          await sendMessage(chatIdStr, `🗑 Excluído: <b>${op.summary}</b>`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await sendMessage(chatIdStr, `❌ Erro ao excluir: ${msg}`);
+        }
+
+      } else if (callbackData.startsWith('abort_op_')) {
+        const opId = callbackData.replace('abort_op_', '');
+        pendingOpsStore.delete(opId);
+        await answerCallbackQuery(queryId, '✗ Cancelado');
+        await sendMessage(chatIdStr, '✗ Operação cancelada.');
       }
     }
   } catch (error) {
