@@ -608,6 +608,16 @@ async function handleUpdate(update: any): Promise<void> {
       } else if (callbackData.startsWith('edit_')) {
         // ── Edit button (Fix #2) ────────────────────────────────────────────
         const eventId = callbackData.replace('edit_', '');
+
+        if (USE_AGENT) {
+          // In agent mode: tell the agent the user wants to edit
+          await answerCallbackQuery(queryId, '✏️ O que quer mudar?');
+          const response = await runAgentTurn(chatIdStr, `O usuário quer editar o evento. Pergunte o que ele quer mudar.`);
+          await sendMessage(chatIdStr, response.text, response.buttons);
+          return;
+        }
+
+        // Legacy edit flow:
         const cached = eventCache.get(eventId);
 
         if (!cached?.validated_event) {
@@ -641,9 +651,28 @@ async function handleUpdate(update: any): Promise<void> {
         await sendMessage(chatIdStr, '❌ Fluxo cancelado. Envie um novo evento quando quiser.');
 
       } else if (callbackData === 'agent_escape_skip_participant') {
-        await answerCallbackQuery(queryId, '⏭ Participante pulado');
-        const response = await runAgentTurn(chatIdStr, 'ok, pode pular esse participante e seguir sem ele');
-        await sendMessage(chatIdStr, response.text, response.buttons);
+        if (isProcessing.has(chatIdStr)) {
+          await answerCallbackQuery(queryId, '⏳ Aguarde...');
+          return;
+        }
+        isProcessing.add(chatIdStr);
+        try {
+          await answerCallbackQuery(queryId, '⏭ Participante pulado');
+          const response = await runAgentTurn(chatIdStr, 'ok, pode pular esse participante e seguir sem ele');
+          await sendMessage(chatIdStr, response.text, response.buttons);
+          // Cache new preview if agent returned confirm button
+          if (response.buttons?.some(row => row.some(b => b.callback_data?.startsWith('confirm_')))) {
+            const state = conversationStore.get(chatIdStr);
+            const evt = state?.draft;
+            const btnRow = response.buttons.flat().find(b => b.callback_data?.startsWith('confirm_'));
+            const eventId = btnRow?.callback_data.replace('confirm_', '');
+            if (evt && eventId) {
+              eventCache.set(eventId, { message: {}, validated_event: evt, timestamp: Date.now() });
+            }
+          }
+        } finally {
+          isProcessing.delete(chatIdStr);
+        }
       }
     }
   } catch (error) {
