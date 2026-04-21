@@ -16,6 +16,7 @@ import { PersistentEventCache } from './lib/calendar/event-cache';
 import { runAgentTurn, conversationStore } from './lib/calendar/agent';
 import { updateEvent, deleteEvent } from './lib/calendar/calendar-ops';
 import { pendingOpsStore } from './lib/calendar/pending-ops-store';
+import { getOrCreateFolder, uploadImageToDrive } from './lib/google-drive';
 
 dotenv.config();
 
@@ -229,13 +230,36 @@ async function handleUpdate(update: any): Promise<void> {
 
       } else if (update.message.photo) {
         await sendMessage(chatIdStr, '🖼 Lendo imagem...');
+        let imageLinkForAgent: string | undefined;
         try {
           const photos = update.message.photo as any[];
           const buf = await downloadTelegramFile(photos[photos.length - 1].file_id);
-          const extracted = await extractTextFromImage(buf);
+
+          const timestamp = Date.now();
+          const filename = `evento-${chatIdStr}-${timestamp}.jpg`;
+
+          // Run Vision extraction and Drive upload in parallel
+          const [extractedResult, linkResult] = await Promise.allSettled([
+            extractTextFromImage(buf),
+            getOrCreateFolder('Calendário Bot')
+              .then(folderId => uploadImageToDrive(buf, 'image/jpeg', filename, folderId)),
+          ]);
+
+          // Vision failure is fatal — propagate to outer catch
+          if (extractedResult.status === 'rejected') throw extractedResult.reason;
+
+          // Drive failure is graceful — log and continue without link
+          if (linkResult.status === 'fulfilled') {
+            imageLinkForAgent = linkResult.value;
+          } else {
+            console.warn('[Bot] Drive upload failed (graceful degradation):', linkResult.reason?.message);
+          }
+
+          const extracted = (extractedResult as PromiseFulfilledResult<string>).value;
           const caption: string = update.message.caption || '';
           rawText = caption ? `${caption}. ${extracted}` : extracted;
           console.log(`[Bot] Image extracted: "${rawText.substring(0, 60)}"`);
+
           if (rawText.trim().toLowerCase() === 'sem evento') {
             await sendMessage(chatIdStr, '⚠️ Não encontrei informações de evento na imagem. Descreva o evento em texto.');
             return;
@@ -246,7 +270,28 @@ async function handleUpdate(update: any): Promise<void> {
           return;
         }
 
-      } else {
+        // Run agent with imageLink (may be undefined if Drive failed)
+        try {
+          const response = await runAgentTurn(chatIdStr, rawText, imageLinkForAgent ? { imageLink: imageLinkForAgent } : undefined);
+          await sendMessage(chatIdStr, response.text, response.buttons);
+          if (response.buttons?.some(row => row.some(b => b.callback_data?.startsWith('confirm_')))) {
+            const state = conversationStore.get(chatIdStr);
+            const evt = state?.draft;
+            const btnRow = response.buttons.flat().find(b => b.callback_data?.startsWith('confirm_'));
+            const eventId = btnRow?.callback_data.replace('confirm_', '');
+            if (evt && eventId) {
+              eventCache.set(eventId, { message: {}, validated_event: evt, timestamp: Date.now() });
+              console.log(`[Bot/Agent] Cached event ${eventId} for chat ${chatId}`);
+            }
+          }
+        } catch (agentErr) {
+          console.error('[Bot/Agent] error', agentErr);
+          await sendMessage(chatIdStr, '⚠️ Não consegui processar isso. Pode tentar reformular ou enviar de forma diferente?');
+        }
+        return; // skip the generic runAgentTurn call below
+      } // ← closes the else if (update.message.photo) block
+
+      else {
         // sticker, document, location, etc.
         await sendMessage(chatIdStr, '⚠️ Tipo de mensagem não suportado. Envie texto, áudio ou imagem.');
         return;
