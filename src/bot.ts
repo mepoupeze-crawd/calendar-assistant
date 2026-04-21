@@ -367,7 +367,7 @@ async function handleUpdate(update: any): Promise<void> {
         await handleCancellation(chatIdStr, eventId);
         await sendMessage(chatIdStr, '❌ Evento cancelado.');
         eventCache.delete(eventId);
-        clearChatState(chatIdStr);
+        conversationStore.clear(chatIdStr);
 
       } else if (callbackData.startsWith('edit_')) {
         // ── Edit button ─────────────────────────────────────────────────────
