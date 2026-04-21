@@ -313,3 +313,50 @@ describe('fase 2 — CRUD de eventos existentes', () => {
     expect(response.text).toMatch(/excluir/i);
   });
 });
+
+describe('contexto ULTIMO_EVENTO_CRIADO_ID', () => {
+  let mockCreate: jest.Mock;
+
+  beforeEach(() => {
+    mockCreate = jest.fn();
+    (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
+      chat: { completions: { create: mockCreate } },
+    } as any));
+
+    conversationStore.clear('chat-ctx');
+  });
+
+  it('4. contexto inclui "(nenhum)" quando lastCreatedEventId não está definido', async () => {
+    // Fresh session — no event created yet
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: undefined } }],
+    });
+
+    await runAgentTurn('chat-ctx', 'oi');
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    const systemMessages = callArgs.messages.filter((m: any) => m.role === 'system');
+    const contextMsg = systemMessages.find((m: any) =>
+      m.content?.includes('ULTIMO_EVENTO_CRIADO_ID')
+    );
+    expect(contextMsg?.content).toContain('ULTIMO_EVENTO_CRIADO_ID: (nenhum)');
+  });
+
+  it('5. contexto inclui o ID real quando lastCreatedEventId está definido', async () => {
+    // Set the last created event ID before the turn
+    conversationStore.setLastCreatedEventId('chat-ctx', 'cal_real123');
+
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: undefined } }],
+    });
+
+    await runAgentTurn('chat-ctx', 'oi');
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    const systemMessages = callArgs.messages.filter((m: any) => m.role === 'system');
+    const contextMsg = systemMessages.find((m: any) =>
+      m.content?.includes('ULTIMO_EVENTO_CRIADO_ID')
+    );
+    expect(contextMsg?.content).toContain('ULTIMO_EVENTO_CRIADO_ID: cal_real123');
+  });
+});
