@@ -13,12 +13,15 @@ import { handleTelegramInput, handleConfirmation, handleCancellation, resolvePar
 import type { TelegramMessage, TelegramResponse } from './handlers/telegram-calendar';
 import type { ValidatedEvent } from './lib/calendar/types';
 import { PersistentEventCache } from './lib/calendar/event-cache';
+import { runAgentTurn, conversationStore } from './lib/calendar/agent';
 
 dotenv.config();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = 'https://api.telegram.org';
 const ALLOWED_CHAT_ID = process.env.ALLOWED_CHAT_ID || '7131103597'; // Default: João Calice (PersonalAssistant)
+const USE_AGENT = process.env.USE_AGENT === 'true';
+if (USE_AGENT) console.log('[Bot] Agent mode enabled (USE_AGENT=true)');
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN not set');
@@ -339,6 +342,7 @@ async function handleUpdate(update: any): Promise<void> {
     // ── /new command — reset session ─────────────────────────────────────────
     if (update.message && messageText === '/new') {
       clearChatState(chatIdStr);
+      conversationStore.clear(chatIdStr);
       await sendMessage(chatIdStr, '🆕 Sessão reiniciada. Pode enviar um novo evento.');
       return;
     }
@@ -398,6 +402,30 @@ async function handleUpdate(update: any): Promise<void> {
       if (!rawText.trim()) return;
 
       console.log(`[Bot] Message from ${chatId}: "${rawText.substring(0, 60)}"`);
+
+      // ── Agent mode (USE_AGENT=true) ──────────────────────────────────────
+      if (USE_AGENT) {
+        try {
+          const response = await runAgentTurn(chatIdStr, rawText);
+          await sendMessage(chatIdStr, response.text, response.buttons);
+
+          // Cache event for confirm button if preview was shown
+          if (response.buttons?.some(row => row.some(b => b.callback_data?.startsWith('confirm_')))) {
+            const state = conversationStore.get(chatIdStr);
+            const evt = state?.draft;
+            const btnRow = response.buttons.flat().find(b => b.callback_data?.startsWith('confirm_'));
+            const eventId = btnRow?.callback_data.replace('confirm_', '');
+            if (evt && eventId) {
+              eventCache.set(eventId, { message: {}, validated_event: evt, timestamp: Date.now() });
+              console.log(`[Bot/Agent] Cached event ${eventId} for chat ${chatId}`);
+            }
+          }
+        } catch (err) {
+          console.error('[Bot/Agent] error', err);
+          await sendMessage(chatIdStr, '❌ Erro no agente. Tente /new e envie de novo.');
+        }
+        return; // skip legacy flow
+      }
 
       // ── Pending email input (user typing an email after "Qual o email?") ──
       const pendingEmail = pendingContactEmails.get(chatIdStr);
@@ -605,6 +633,17 @@ async function handleUpdate(update: any): Promise<void> {
           chatIdStr,
           `✏️ Editando evento:\n\n${summary}\n\nO que você quer mudar?\n<i>Ex: "muda horário para 16:00", "adiciona sala 101", "com Maria também"</i>`
         );
+
+      } else if (callbackData === 'agent_escape_cancel_flow') {
+        await answerCallbackQuery(queryId, '❌ Fluxo cancelado');
+        conversationStore.clear(chatIdStr);
+        clearChatState(chatIdStr);
+        await sendMessage(chatIdStr, '❌ Fluxo cancelado. Envie um novo evento quando quiser.');
+
+      } else if (callbackData === 'agent_escape_skip_participant') {
+        await answerCallbackQuery(queryId, '⏭ Participante pulado');
+        const response = await runAgentTurn(chatIdStr, 'ok, pode pular esse participante e seguir sem ele');
+        await sendMessage(chatIdStr, response.text, response.buttons);
       }
     }
   } catch (error) {
