@@ -1,7 +1,7 @@
 import { google, calendar_v3 } from 'googleapis';
 import { getGoogleAuth } from './google-auth';
 
-const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || process.env.GOG_ACCOUNT || 'primary';
 
 export interface CalendarEventSummary {
   id: string;
