@@ -97,6 +97,19 @@ tmux attach-session -t calendar-bot
 tmux kill-session -t calendar-bot
 ```
 
+## Usage Examples
+
+### Creating events
+- `"Reunião com João amanhã às 14:30"` → parses to meeting event
+- `"Standupas 9:00"` → parses to standup
+
+### Editing or deleting existing events
+- `"cancela a reunião de amanhã com João"` → delete meeting
+- `"muda minha reunião de hoje para 15h"` → reschedule
+- `"quais meus compromissos essa semana?"` → list events
+
+All changes and deletions require confirmation via button before writing to Google Calendar.
+
 ## Testing
 
 ### Run All Tests
