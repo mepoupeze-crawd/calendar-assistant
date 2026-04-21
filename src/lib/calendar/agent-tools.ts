@@ -62,15 +62,15 @@ export const TOOL_SCHEMAS: Array<{
         properties: {
           title: { type: 'string', description: 'Event title' },
           start_date: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
-          start_time: { type: ['string', 'null'], description: 'Start time (HH:MM) or null' },
-          end_time: { type: ['string', 'null'], description: 'End time (HH:MM) or null' },
+          start_time: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Start time (HH:MM) or null' },
+          end_time: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'End time (HH:MM) or null' },
           duration_minutes: {
-            type: ['integer', 'null'],
+            anyOf: [{ type: 'integer' }, { type: 'null' }],
             description: 'Duration in minutes or null',
           },
           all_day: { type: 'boolean', description: 'Whether the event is all-day' },
-          location: { type: ['string', 'null'], description: 'Event location or null' },
-          description: { type: ['string', 'null'], description: 'Event description or null' },
+          location: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Event location or null' },
+          description: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Event description or null' },
           participants: {
             type: 'array',
             description: 'List of participants',
@@ -78,7 +78,7 @@ export const TOOL_SCHEMAS: Array<{
               type: 'object',
               properties: {
                 name: { type: 'string' },
-                email: { type: ['string', 'null'] },
+                email: { anyOf: [{ type: 'string' }, { type: 'null' }] },
               },
               required: ['name'],
             },
