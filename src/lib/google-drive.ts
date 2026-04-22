@@ -1,9 +1,20 @@
 import { google, drive_v3 } from 'googleapis';
 import { Readable } from 'stream';
-import { getGoogleAuth } from './calendar/google-auth';
+import * as fs from 'fs';
+
+function getDriveAuth() {
+  const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
+  if (!keyFile) throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY_FILE not set');
+  const key = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
+  return new google.auth.JWT({
+    email: key.client_email,
+    key: key.private_key,
+    scopes: ['https://www.googleapis.com/auth/drive.file'],
+  });
+}
 
 function driveClient(): drive_v3.Drive {
-  return google.drive({ version: 'v3', auth: getGoogleAuth() });
+  return google.drive({ version: 'v3', auth: getDriveAuth() });
 }
 
 let cachedFolderId: string | null = null;
