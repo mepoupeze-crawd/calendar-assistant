@@ -251,8 +251,9 @@ async function handleUpdate(update: any): Promise<void> {
           // Drive failure is graceful — log and continue without link
           if (linkResult.status === 'fulfilled') {
             imageLinkForAgent = linkResult.value;
+            console.log(`[Bot] Drive upload success: ${imageLinkForAgent}`);
           } else {
-            console.warn('[Bot] Drive upload failed (graceful degradation):', linkResult.reason?.message);
+            console.warn('[Bot] Drive upload failed (graceful degradation):', linkResult.reason?.message, linkResult.reason?.stack);
           }
 
           const extracted = (extractedResult as PromiseFulfilledResult<string>).value;

@@ -311,13 +311,20 @@ registerHandler('ask_user', async (args) => {
 
 // ─── Task 3 handlers ──────────────────────────────────────────────────────────
 
-registerHandler('propose_event', async (args) => {
+registerHandler('propose_event', async (args, state) => {
   const rawParticipants = (args.participants as Array<{ name: string; email?: string | null }> | undefined) ?? [];
   const participants: ParsedParticipant[] = rawParticipants.map((p) => ({
     name: p.name,
     email: p.email ?? null,
     resolved: !!p.email,
   }));
+
+  // Deterministically prepend the Drive image link — don't rely on LLM to include it
+  let description = args.description != null ? String(args.description) : null;
+  if (state.imageLink && !description?.includes(state.imageLink)) {
+    const linkLine = `📸 Criado a partir de foto: ${state.imageLink}`;
+    description = description ? `${linkLine}\n\n${description}` : linkLine;
+  }
 
   const draft: ValidatedEvent = {
     title: String(args.title ?? ''),
@@ -327,7 +334,7 @@ registerHandler('propose_event', async (args) => {
     duration_minutes: typeof (args as any).duration_minutes === 'number' ? (args as any).duration_minutes : null,
     all_day: typeof args.all_day === 'boolean' ? args.all_day : false,
     participants,
-    description: args.description != null ? String(args.description) : null,
+    description,
     location: args.location != null ? String(args.location) : null,
   };
 
