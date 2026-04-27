@@ -41,6 +41,7 @@ const authUrl = oauth2Client.generateAuthUrl({
   scope: [
     'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/contacts.readonly',
+    'https://www.googleapis.com/auth/drive.file',
   ],
   prompt: 'consent', // force refresh_token even if previously authorized
 });

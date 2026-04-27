@@ -13,16 +13,11 @@ jest.mock('googleapis', () => ({
         create: mockPermissionsCreate,
       },
     })),
-    auth: {
-      JWT: jest.fn(() => ({})),
-    },
   },
 }));
-jest.mock('fs', () => ({
-  readFileSync: jest.fn(() => JSON.stringify({ client_email: 'test@sa.com', private_key: 'fake-key' })),
+jest.mock('./calendar/google-auth', () => ({
+  getGoogleAuth: jest.fn(() => ({})),
 }));
-
-process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE = './credentials/service-account.json';
 
 import { getOrCreateFolder, uploadImageToDrive, _resetFolderCacheForTesting } from './google-drive';
 

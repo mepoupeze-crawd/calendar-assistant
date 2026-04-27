@@ -40,6 +40,34 @@ const eventCache = new PersistentEventCache(); // persiste em data/event-cache.j
 // Prevents race conditions when user sends messages in rapid succession.
 const isProcessing = new Set<string>();
 
+/**
+ * Log agent errors with conversation history shape so root causes (e.g. orphan
+ * `tool` messages from FIFO pruning) are diagnosable from the journal alone.
+ */
+function logAgentError(source: 'text' | 'photo' | 'callback', chatId: string, err: unknown): void {
+  const e = err as { message?: string; status?: number; error?: { param?: string; message?: string } };
+  const state = conversationStore.get(chatId);
+  const messages = state?.messages ?? [];
+  const summary = messages.map((m, i) => {
+    const tag = m.role === 'assistant' && m.tool_calls
+      ? `assistant[tool_calls=${m.tool_calls.map(tc => tc.function.name).join(',')}]`
+      : m.role === 'tool'
+        ? `tool[${m.name ?? '?'}#${m.tool_call_id ?? '?'}]`
+        : m.role;
+    return `${i}:${tag}`;
+  });
+  console.error('[Bot/Agent] error', {
+    source,
+    chatId,
+    message: e?.message,
+    status: e?.status,
+    apiParam: e?.error?.param,
+    apiMessage: e?.error?.message,
+    historyLen: messages.length,
+    historyShape: summary,
+  });
+}
+
 /** Clears all pending state for a chat. All state is now in conversationStore. */
 function clearChatState(chatId: string): void {
   // All state is now in conversationStore; cleared separately via conversationStore.clear()
@@ -286,7 +314,7 @@ async function handleUpdate(update: any): Promise<void> {
             }
           }
         } catch (agentErr) {
-          console.error('[Bot/Agent] error', agentErr);
+          logAgentError('photo', chatIdStr, agentErr);
           await sendMessage(chatIdStr, '⚠️ Não consegui processar isso. Pode tentar reformular ou enviar de forma diferente?');
         }
         return; // skip the generic runAgentTurn call below
@@ -319,7 +347,7 @@ async function handleUpdate(update: any): Promise<void> {
           }
         }
       } catch (err) {
-        console.error('[Bot/Agent] error', err);
+        logAgentError('text', chatIdStr, err);
         await sendMessage(chatIdStr, '⚠️ Não consegui processar isso. Pode tentar reformular ou enviar de forma diferente?');
       }
       } finally {

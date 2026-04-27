@@ -87,20 +87,49 @@ export class ConversationStore {
   }
 
   /**
-   * Appends `msg` to the message history for `chatId`.
-   * If the history exceeds `maxMessages`, the oldest messages are pruned (FIFO).
-   * Updates `lastUsed` to reset the TTL window.
+   * Appends `msg` to the message history for `chatId`. When over `maxMessages`,
+   * prunes the oldest messages — but never:
+   *  (a) drops leading `system` messages, and
+   *  (b) leaves a `tool` message at the head of the kept region (orphaning it
+   *      from its `assistant(tool_calls)` parent triggers OpenAI 400).
+   * The cap is therefore soft: the history may briefly exceed `maxMessages`
+   * to keep tool-call/tool pairs intact.
    */
   appendMessage(chatId: string, msg: AgentMessage): void {
     const state = this.getOrCreate(chatId);
     state.messages.push(msg);
+    this.pruneSafely(state.messages);
+    state.lastUsed = Date.now();
+  }
 
-    // FIFO pruning
-    if (state.messages.length > this.maxMessages) {
-      state.messages.splice(0, state.messages.length - this.maxMessages);
+  private pruneSafely(messages: AgentMessage[]): void {
+    if (messages.length <= this.maxMessages) return;
+
+    let dropStart = 0;
+    while (dropStart < messages.length && messages[dropStart].role === 'system') {
+      dropStart++;
     }
 
-    state.lastUsed = Date.now();
+    let dropEnd = Math.min(
+      messages.length,
+      dropStart + (messages.length - this.maxMessages)
+    );
+
+    // Advance dropEnd until the kept head is a safe boundary:
+    //   - role 'user': start of a fresh turn
+    //   - role 'assistant' WITHOUT tool_calls: a final reply
+    // Skip past tool messages and assistant-with-tool_calls (would be orphaned).
+    while (dropEnd < messages.length) {
+      const head = messages[dropEnd];
+      if (head.role === 'user') break;
+      if (head.role === 'assistant' && !head.tool_calls) break;
+      dropEnd++;
+    }
+
+    if (dropEnd >= messages.length) return; // would prune all non-system; abort
+    if (dropEnd <= dropStart) return;
+
+    messages.splice(dropStart, dropEnd - dropStart);
   }
 
   /**

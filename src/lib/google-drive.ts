@@ -1,20 +1,9 @@
 import { google, drive_v3 } from 'googleapis';
 import { Readable } from 'stream';
-import * as fs from 'fs';
-
-function getDriveAuth() {
-  const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE;
-  if (!keyFile) throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY_FILE not set');
-  const key = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
-  return new google.auth.JWT({
-    email: key.client_email,
-    key: key.private_key,
-    scopes: ['https://www.googleapis.com/auth/drive.file'],
-  });
-}
+import { getGoogleAuth } from './calendar/google-auth';
 
 function driveClient(): drive_v3.Drive {
-  return google.drive({ version: 'v3', auth: getDriveAuth() });
+  return google.drive({ version: 'v3', auth: getGoogleAuth() });
 }
 
 let cachedFolderId: string | null = null;
@@ -24,33 +13,48 @@ export function _resetFolderCacheForTesting(): void {
   cachedFolderId = null;
 }
 
+function describeError(err: unknown): Record<string, unknown> {
+  const e = err as { message?: string; code?: number | string; errors?: unknown; response?: { status?: number; data?: unknown } };
+  return {
+    message: e?.message,
+    code: e?.code,
+    httpStatus: e?.response?.status,
+    apiErrors: e?.errors ?? e?.response?.data,
+  };
+}
+
 export async function getOrCreateFolder(name: string): Promise<string> {
   if (cachedFolderId) return cachedFolderId;
 
   const drive = driveClient();
   const safeName = name.replace(/'/g, "\\'");
-  const res = await drive.files.list({
-    q: `name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: 'files(id)',
-    spaces: 'drive',
-  });
+  try {
+    const res = await drive.files.list({
+      q: `name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'files(id)',
+      spaces: 'drive',
+    });
 
-  if (res.data.files && res.data.files.length > 0) {
-    cachedFolderId = res.data.files[0].id!;
+    if (res.data.files && res.data.files.length > 0) {
+      cachedFolderId = res.data.files[0].id!;
+      return cachedFolderId;
+    }
+
+    const created = await drive.files.create({
+      requestBody: {
+        name,
+        mimeType: 'application/vnd.google-apps.folder',
+      },
+      fields: 'id',
+    });
+
+    if (!created.data.id) throw new Error('Drive folder creation: missing id');
+    cachedFolderId = created.data.id;
     return cachedFolderId;
+  } catch (err) {
+    console.error('[Drive] getOrCreateFolder failed', { name, ...describeError(err) });
+    throw err;
   }
-
-  const created = await drive.files.create({
-    requestBody: {
-      name,
-      mimeType: 'application/vnd.google-apps.folder',
-    },
-    fields: 'id',
-  });
-
-  if (!created.data.id) throw new Error('Drive folder creation: missing id');
-  cachedFolderId = created.data.id;
-  return cachedFolderId;
 }
 
 export async function uploadImageToDrive(
@@ -62,28 +66,41 @@ export async function uploadImageToDrive(
   const drive = driveClient();
   const stream = Readable.from(buffer);
 
-  const res = await drive.files.create({
-    requestBody: {
-      name: filename,
-      parents: [folderId],
-    },
-    media: {
+  let fileId: string | null | undefined;
+  try {
+    const res = await drive.files.create({
+      requestBody: {
+        name: filename,
+        parents: [folderId],
+      },
+      media: {
+        mimeType,
+        body: stream,
+      },
+      fields: 'id,webViewLink',
+    });
+
+    fileId = res.data.id;
+    const webViewLink = res.data.webViewLink;
+
+    if (!fileId) throw new Error('Drive upload: missing file id in response');
+    if (!webViewLink) throw new Error('Drive upload: missing webViewLink in response');
+
+    await drive.permissions.create({
+      fileId,
+      requestBody: { type: 'anyone', role: 'reader' },
+    });
+
+    return webViewLink;
+  } catch (err) {
+    console.error('[Drive] uploadImageToDrive failed', {
+      filename,
+      folderId,
       mimeType,
-      body: stream,
-    },
-    fields: 'id,webViewLink',
-  });
-
-  const fileId = res.data.id;
-  const webViewLink = res.data.webViewLink;
-
-  if (!fileId) throw new Error('Drive upload: missing file id in response');
-  if (!webViewLink) throw new Error('Drive upload: missing webViewLink in response');
-
-  await drive.permissions.create({
-    fileId,
-    requestBody: { type: 'anyone', role: 'reader' },
-  });
-
-  return webViewLink;
+      bufferBytes: buffer.length,
+      fileId: fileId ?? null,
+      ...describeError(err),
+    });
+    throw err;
+  }
 }

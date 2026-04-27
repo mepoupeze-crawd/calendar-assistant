@@ -61,12 +61,12 @@ describe('ConversationStore', () => {
   });
 
   describe('2. FIFO pruning when exceeding maxMessages', () => {
-    it('prunes oldest messages when maxMessages is exceeded', () => {
+    it('prunes oldest user messages when maxMessages is exceeded', () => {
       const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 3 });
       store.appendMessage('chat-1', makeMsg('msg-1'));
       store.appendMessage('chat-1', makeMsg('msg-2'));
       store.appendMessage('chat-1', makeMsg('msg-3'));
-      store.appendMessage('chat-1', makeMsg('msg-4')); // should prune msg-1
+      store.appendMessage('chat-1', makeMsg('msg-4'));
 
       const state = store.get('chat-1')!;
       expect(state.messages).toHaveLength(3);
@@ -74,15 +74,87 @@ describe('ConversationStore', () => {
       expect(state.messages[2].content).toBe('msg-4');
     });
 
-    it('keeps exactly maxMessages after many appends', () => {
+    it('approximately bounds growth across many appends (allows slack to preserve tool-call pairs)', () => {
       const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 2 });
       for (let i = 1; i <= 10; i++) {
         store.appendMessage('chat-1', makeMsg(`msg-${i}`));
       }
       const state = store.get('chat-1')!;
-      expect(state.messages).toHaveLength(2);
-      expect(state.messages[0].content).toBe('msg-9');
-      expect(state.messages[1].content).toBe('msg-10');
+      // We allow more than maxMessages in worst case to avoid splitting tool pairs,
+      // but with all-user messages it should hit exactly the cap.
+      expect(state.messages.length).toBeLessThanOrEqual(2);
+      expect(state.messages[state.messages.length - 1].content).toBe('msg-10');
+    });
+  });
+
+  describe('2b. pruning preserves system messages and tool-call/tool pairs', () => {
+    it('never prunes leading system messages', () => {
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 3 });
+      store.appendMessage('chat-1', makeMsg('system prompt', 'system'));
+      for (let i = 1; i <= 10; i++) {
+        store.appendMessage('chat-1', makeMsg(`u-${i}`, 'user'));
+      }
+      const state = store.get('chat-1')!;
+      expect(state.messages[0].role).toBe('system');
+      expect(state.messages[0].content).toBe('system prompt');
+    });
+
+    it('never leaves an orphan tool message at the head of the kept region', () => {
+      // Reproduce the production bug: assistant(tool_calls) + tool(result) + assistant(reply)
+      // pattern repeated many times, then a small maxMessages forcing a cut.
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 4 });
+      store.appendMessage('chat-1', makeMsg('system', 'system'));
+      store.appendMessage('chat-1', makeMsg('u1', 'user'));
+      const asst1: AgentMessage = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'foo', arguments: '{}' } }],
+      };
+      const tool1: AgentMessage = { role: 'tool', content: '{}', tool_call_id: 'tc1', name: 'foo' };
+      store.appendMessage('chat-1', asst1);
+      store.appendMessage('chat-1', tool1);
+      store.appendMessage('chat-1', makeMsg('assistant final', 'assistant'));
+      store.appendMessage('chat-1', makeMsg('u2', 'user'));
+      store.appendMessage('chat-1', makeMsg('assistant final 2', 'assistant'));
+
+      const state = store.get('chat-1')!;
+      // System always preserved at index 0
+      expect(state.messages[0].role).toBe('system');
+      // The first non-system message must be a valid head: user OR assistant-without-tool_calls.
+      // It must NEVER be a `tool` message (that would orphan it from its tool_calls parent).
+      const firstNonSystem = state.messages.find(m => m.role !== 'system')!;
+      expect(firstNonSystem.role).not.toBe('tool');
+      if (firstNonSystem.role === 'assistant') {
+        expect(firstNonSystem.tool_calls).toBeUndefined();
+      }
+    });
+
+    it('keeps the assistant-with-tool_calls and its tool result together when both fit', () => {
+      const store = new ConversationStore({ ttlMs: 60_000, maxMessages: 5 });
+      store.appendMessage('chat-1', makeMsg('system', 'system'));
+      store.appendMessage('chat-1', makeMsg('old user', 'user'));
+      store.appendMessage('chat-1', makeMsg('older assistant', 'assistant'));
+      const asst: AgentMessage = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'foo', arguments: '{}' } }],
+      };
+      const toolResult: AgentMessage = { role: 'tool', content: '{"ok":true}', tool_call_id: 'tc1', name: 'foo' };
+      store.appendMessage('chat-1', asst);
+      store.appendMessage('chat-1', toolResult);
+      store.appendMessage('chat-1', makeMsg('final assistant', 'assistant'));
+
+      const state = store.get('chat-1')!;
+      // Validate invariant: every tool message has a preceding assistant with matching tool_call id.
+      for (let i = 0; i < state.messages.length; i++) {
+        if (state.messages[i].role === 'tool') {
+          const tcId = state.messages[i].tool_call_id;
+          const prevAsst = [...state.messages.slice(0, i)].reverse()
+            .find(m => m.role === 'assistant' && m.tool_calls);
+          expect(prevAsst).toBeDefined();
+          expect(prevAsst!.tool_calls!.some(tc => tc.id === tcId)).toBe(true);
+        }
+      }
     });
   });
 
